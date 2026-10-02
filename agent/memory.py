@@ -73,3 +73,44 @@ def recall_profile():
 
 def reset_profile():
     save_profile(dict(DEFAULT_PROFILE))
+PREFS_PATH = os.path.join(MEMORY_DIR, 'preferences.json')
+
+def record_feedback(question, reply, rating):
+    """第11章：记录用户反馈（偏好数据，为 Agentic-RL 微调备料）"""
+    try:
+        os.makedirs(MEMORY_DIR, exist_ok=True)
+        prefs = []
+        if os.path.exists(PREFS_PATH):
+            try:
+                with open(PREFS_PATH, 'r', encoding='utf-8') as f:
+                    prefs = json.load(f)
+            except Exception:
+                prefs = []
+            if not isinstance(prefs, list):
+                prefs = []
+        prefs.append({
+            'question': (question or '')[:300],
+            'reply': (reply or '')[:500],
+            'rating': int(rating),
+            'time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+        })
+        prefs = prefs[-2000:]
+        with open(PREFS_PATH, 'w', encoding='utf-8') as f:
+            json.dump(prefs, f, ensure_ascii=False, indent=2)
+        return len(prefs)
+    except Exception:
+        return None
+
+def session_summary(history, max_len=10):
+    """第8章：会话摘要——历史超过阈值时返回摘要提示（LLM 模式可用）"""
+    if not history or len(history) <= max_len:
+        return None
+    # 保留最近的 max_len 条，更早的合并为一段
+    recent = history[-max_len:]
+    old = history[:-max_len]
+    lines = []
+    for h in old:
+        who = '用户' if h.get('role') == 'user' else '助手'
+        content = (h.get('content') or '')[:120]
+        lines.append(who + '：' + content)
+    return '（以下为较早对话压缩摘要）\n' + '\n'.join(lines[-6:])

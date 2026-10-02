@@ -16,6 +16,7 @@ from services import (detect_intent, pick_role, ROLE_NAME, ROLE_OPENING,
                       list_templates, match_checklist)
 from agent_core import get_agent
 import llm as llm_mod
+import memory
 
 BANNER = '''
 ┌──────────────────────────────────────────────────────────┐
@@ -95,6 +96,7 @@ def main():
     print('知识库加载完成：%d 个知识块，%d 篇文档。\n' % (len(chunks), len(docs)))
     role = None
     history = []
+    paradigm = 'adaptive'
     checklist_state = None
     show_topic_menu()
     try:
@@ -129,6 +131,24 @@ def main():
             continue
         if ql in ('whoami', '身份'):
             print('当前身份：%s' % ROLE_NAME.get(role, '未指定'))
+            continue
+        if ql.startswith('paradigm'):
+            parts = q.split()
+            if len(parts) >= 2 and parts[1] in ('adaptive', 'react', 'plan', 'reflection'):
+                paradigm = parts[1]
+                print('当前范式已切换：' + paradigm)
+            else:
+                print('范式：' + paradigm + '（可选：paradigm react / plan / reflection / adaptive）')
+            continue
+        if ql in ('好评', '👍') or ql == 'feedback ok':
+            if history:
+                memory.record_feedback(history[-2].get('content', ''), history[-1].get('content', ''), 1)
+                print('已记录好评（写入 memory/preferences.json，将用于模型优化数据）。')
+            continue
+        if ql in ('差评', '👎') or ql == 'feedback bad':
+            if history:
+                memory.record_feedback(history[-2].get('content', ''), history[-1].get('content', ''), 0)
+                print('已记录差评（写入 memory/preferences.json）。')
             continue
         if ql.startswith('llm') or q in ('大模型',):
             out, _ = llm_command(q, chunks, idf, history)
@@ -173,7 +193,10 @@ def main():
         intents = detect_intent(q)
         role = pick_role(intents, role)
         history.append({'role': 'user', 'content': q})
-        result = get_agent().run(q, role, history, llm_mod.is_configured())
+        summary = memory.session_summary(history)
+        if summary:
+            print('  · 摘要记忆：已压缩较早对话（' + str(len(history)) + ' 条）')
+        result = get_agent().run(q, role, history, llm_mod.is_configured(), paradigm)
         for step in result.get('trace', []):
             print('  · ' + step)
         print('\n' + result.get('reply', ''))

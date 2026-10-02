@@ -46,6 +46,8 @@
 - **评估**：`python agent/eval.py` 内置 30 题评估集（个人/集体/企业各 10），输出 `examples/eval_report.md`（本地模式：30/30 通过）
 - **可观测**：每次问答返回思考轨迹 trace，GUI 状态栏 / CLI / Web API 均可查看推理过程
 
+- **十六章节全面深化**：每章方法论已逐章落地（范式/工具/记忆/上下文/MCP/反馈/评估/研究/多智能体/路线图），见 [docs/hello_agents_16章借鉴与深化对照.md](docs/hello_agents_16章借鉴与深化对照.md) 与 [docs/agent_design.md](docs/agent_design.md)
+
 ## ⚠️ 免责声明
 
 知识辅助工具，不构成医疗诊断或法律意见；用药请遵从医师处方与执业药师指导，合规问题以现行有效法规及属地监管部门为准。

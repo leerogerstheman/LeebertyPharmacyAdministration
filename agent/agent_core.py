@@ -21,12 +21,21 @@ SYSTEM_BASE = ('你是“LeebertyPharmacyAdministration”药事管理智能 Age
     + '回答要求：1) 优先基于工具结果与知识库，不编造法规条款与数据；2) 分条作答、简体中文；'
     + '3) 合规问题注明以现行有效法规与属地监管部门为准；4) 引用工具结果时标注【来源】。')
 
+FEW_SHOT = ('调用示例：\n'
+    + '用户：四查十对是什么？\n'
+    + '助手：[TOOL_CALL:kb_search:四查十对]\n'
+    + '[TOOL_RESULT:kb_search] 返回《06_处方与调剂管理》相关章节…\n'
+    + '助手：四查十对包括查处方、查药品、查配伍禁忌、查用药合理性……（最终回答，不带工具标记）')
+
 def _system_prompt(role):
     parts = [SYSTEM_BASE, ROLE_GUIDE.get(role, '')]
     prof = memory.recall_profile()
     if prof:
         parts.append(prof)
     parts.append(TOOL_PROTOCOL)
+    parts.append(
+        FEW_SHOT
+    )
     return '\n'.join(x for x in parts if x)
 
 def _clean_reply(text):
@@ -52,12 +61,19 @@ class PharmaAgent:
             self.chunks, self.idf = load_kb()
         self.ctx = {'chunks': self.chunks, 'idf': self.idf}
 
-    def run(self, query, role=None, history=None, use_llm=True, paradigm='react'):
-        """统一入口：返回 dict（reply/sources/llm/model/trace/llm_error）"""
+    def run(self, query, role=None, history=None, use_llm=True, paradigm='adaptive'):
+        """统一入口：返回 dict（reply/sources/llm/model/trace/llm_error）
+        paradigm: adaptive（自动）/ react / plan / reflection"""
         trace = []
         intents = detect_intent(query)
         role = pick_role(intents, role)
         trace.append('身份：' + role + ('（意图：' + '、'.join(intents) + '）' if intents else ''))
+        # 第14章：深度研究模式
+        if re.search(r'深度研究|研究报告|research', query, re.I):
+            return self.research(query, role, history, trace)
+        if paradigm == 'adaptive':
+            paradigm = self._pick_paradigm(query)
+            trace.append('范式选择：' + paradigm)
         if use_llm and llm_mod.is_configured():
             if paradigm == 'plan':
                 return self._run_plan(query, role, history, trace)
@@ -65,6 +81,58 @@ class PharmaAgent:
                 return self._run_reflection(query, role, history, trace)
             return self._run_react(query, role, history, trace)
         return self._run_local(query, role, trace)
+
+    def _pick_paradigm(self, q):
+        """adaptive 策略：规划类问题→plan；审查类问题→reflection；其余→react"""
+        if re.search(r'规划|体系|方案|建设|路线|计划|实施', q):
+            return 'plan'
+        if re.search(r'审查|核对|复核|检查一遍|评估我的|自检', q):
+            return 'reflection'
+        return 'react'
+
+    def research(self, topic, role, history, trace):
+        """第14章：深度研究模式——多关键词检索 + 结构化报告（本地也可用）"""
+        from tools import kb_search
+        report_topic = re.sub(r'深度研究|研究报告|research[:：\s]*', '', topic, flags=re.I).strip() or topic
+        # 关键词扩展：取主题词 + 常用法规视角
+        keywords = []
+        for k in report_topic.replace('，', ' ').replace('、', ' ').replace('？', ' ').split():
+            if len(k) >= 2:
+                keywords.append(k)
+        keywords = keywords[:3]
+        if report_topic not in keywords:
+            keywords.insert(0, report_topic)
+        keywords += ['合规 要求']
+        sources = []
+        findings = []
+        trace.append('深度研究主题：' + report_topic)
+        for kw in keywords[:4]:
+            trace.append('检索：' + kw)
+            text, src = kb_search(kw, self.chunks, self.idf, 2)
+            sources.extend(src)
+            findings.append('### 检索词：' + kw)
+            findings.append(text)
+            findings.append('')
+        report = []
+        report.append('## 深度研究报告：' + report_topic)
+        report.append('')
+        if llm_mod.is_configured():
+            try:
+                msgs = [
+                    {'role': 'system', 'content': '你是药事管理研究分析师。请基于【检索材料】撰写结构化深度研究报告（背景/核心要点/风险提示/行动建议），分条清晰，注明以现行法规为准，不得编造。'},
+                    {'role': 'user', 'content': '研究主题：' + report_topic + '\n\n【检索材料】\n' + '\n'.join(findings)[:6000]},
+                ]
+                summary = llm_mod.chat(msgs)
+                trace.append('LLM 综合生成研究报告')
+                if role == 'personal' and '⚠️' not in summary:
+                    summary += '\n\n⚠️ 用药安全提示：请遵医嘱用药；出现严重不良反应立即就医。'
+                return {'reply': summary, 'sources': list(dict.fromkeys(sources)), 'llm': True, 'model': llm_mod.load_config().get('model', ''), 'trace': trace, 'llm_error': None}
+            except RuntimeError as e:
+                trace.append('LLM 汇总失败，输出本地检索汇编（%s）' % (e,))
+        report.append('\n'.join(findings))
+        report.append('## 研究小结')
+        report.append('以上为本主题在知识库中的检索汇编（' + str(len(sources)) + ' 个来源）。如需进一步细化，请指定子主题（如"GSP 数据完整性要求"）。')
+        return {'reply': '\n'.join(report), 'sources': list(dict.fromkeys(sources)), 'llm': False, 'model': '', 'trace': trace, 'llm_error': None}
 
     # ---------- 本地模式：规则路由（工具同样可用） ----------
     def _run_local(self, query, role, trace):

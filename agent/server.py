@@ -21,6 +21,7 @@ from services import (detect_intent, pick_role, ROLE_NAME, ROLE_OPENING,
                       CHECKLISTS, checklist_start, checklist_step, checklist_report,
                       list_templates, match_checklist)
 import llm as llm_mod
+import memory
 from agent_core import get_agent
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -28,7 +29,7 @@ WEB_DIR = os.path.join(ROOT, 'web')
 
 DISCLAIMER = '⚠️ 本助手为药事管理知识辅助工具，不构成医疗诊断或法律意见；用药请遵从医师处方与执业药师指导，合规问题以现行法规及属地监管部门为准。'
 
-def build_reply(message, role, state, history, use_llm):
+def build_reply(message, role, state, history, use_llm, paradigm='adaptive'):
     q = (message or '').strip()
     ql = q.lower()
     resp = {'reply': '', 'role': role, 'state': state, 'sources': [],
@@ -96,7 +97,7 @@ def build_reply(message, role, state, history, use_llm):
     role = pick_role(intents, role)
     resp['role'] = role
     # Agent 引擎：ReAct/规划/反思范式 + 工具循环（无 LLM 时本地工具路由）
-    agent_result = get_agent().run(q, role, history, bool(use_llm))
+    agent_result = get_agent().run(q, role, history, bool(use_llm), paradigm)
     resp['reply'] = agent_result.get('reply', '')
     resp['sources'] = agent_result.get('sources') or resp['sources']
     resp['llm'] = agent_result.get('llm', False)
@@ -130,6 +131,40 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path == '/api/openapi.json':
+            spec = {
+                'openapi': '3.0.3',
+                'info': {'title': 'LeebertyPharmacyAdministration Agent API', 'version': '3.0.0',
+                         'description': '药事管理智能体后端：可被 Dify/Coze/n8n 等低代码平台当作 HTTP 工具调用'},
+                'paths': {
+                    '/api/ask': {
+                        'post': {
+                            'summary': '向药事管理 Agent 提问（message 必填；role/paradigm/use_llm 可选）',
+                            'requestBody': {'content': {'application/json': {'schema': {
+                                'type': 'object',
+                                'properties': {
+                                    'message': {'type': 'string'}, 'role': {'type': 'string', 'enum': ['personal', 'org', 'company']},
+                                    'paradigm': {'type': 'string', 'enum': ['adaptive', 'react', 'plan', 'reflection']},
+                                    'use_llm': {'type': 'boolean', 'default': True},
+                                }, 'required': ['message'],
+                            }}}},
+                            'responses': {'200': {'description': '{reply, trace, sources, llm, model}'}},
+                        }
+                    },
+                    '/api/feedback': {
+                        'post': {
+                            'summary': '回答反馈（rating: 1 好评 / 0 差评），写入偏好数据',
+                            'requestBody': {'content': {'application/json': {'schema': {
+                                'type': 'object', 'properties': {
+                                    'question': {'type': 'string'}, 'reply': {'type': 'string'}, 'rating': {'type': 'integer', 'enum': [0, 1]},
+                                }}}}},
+                            'responses': {'200': {'description': '{ok, total}'}},
+                        }
+                    },
+                },
+            }
+            self._send(200, json.dumps(spec, ensure_ascii=False))
+            return
         if parsed.path == '/api/health':
             self._send(200, json.dumps({'ok': True, 'chunks': len(chunks)}, ensure_ascii=False))
             return
@@ -195,20 +230,30 @@ class Handler(BaseHTTPRequestHandler):
             use_llm = payload.get('use_llm')
             if use_llm is None:
                 use_llm = True
+            paradigm = payload.get('paradigm') or session_holder['paradigm']
+            session_holder['paradigm'] = paradigm
             try:
-                resp = build_reply(payload.get('message', ''), role, state, session_holder['history'], bool(use_llm))
+                resp = build_reply(payload.get('message', ''), role, state, session_holder['history'], bool(use_llm), paradigm)
                 session_holder['role'] = resp['role']
                 session_holder['state'] = resp['state']
+                resp['paradigm'] = paradigm
                 resp['disclaimer'] = DISCLAIMER
                 self._send(200, json.dumps(resp, ensure_ascii=False))
             except Exception as e:
                 self._send(500, json.dumps({'error': str(e)}, ensure_ascii=False))
             return
+        if parsed.path == '/api/feedback':
+            try:
+                n = memory.record_feedback(payload.get('question'), payload.get('reply'), int(payload.get('rating', 1)))
+                self._send(200, json.dumps({'ok': True, 'total': n}, ensure_ascii=False))
+            except Exception as e:
+                self._send(500, json.dumps({'ok': False, 'error': str(e)}, ensure_ascii=False))
+            return
         self._send(404, json.dumps({'error': 'not found'}, ensure_ascii=False))
 
 def start(port=8901, open_browser=True):
     global chunks, idf, session_holder
-    session_holder = {'role': None, 'state': None, 'history': []}
+    session_holder = {'role': None, 'state': None, 'history': [], 'paradigm': 'adaptive'}
     chunks, idf = load_kb()
     if not chunks:
         print('错误：知识库加载失败，请检查 knowledge_base 目录。')

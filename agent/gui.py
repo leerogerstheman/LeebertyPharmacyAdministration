@@ -12,6 +12,7 @@ from tkinter import ttk, messagebox
 from engine import load_kb
 from server import build_reply
 import llm as llm_mod
+import memory
 
 BG = '#eef4fa'
 USER_BG = '#0b5394'
@@ -38,6 +39,7 @@ class ChatApp(tk.Tk):
         self.history = []
         self.checklist_state = None
         self.busy = False
+        self.paradigm = 'adaptive'
         self.chunks, self.idf = load_kb()
         self._build_menu()
         self._build_toolbar()
@@ -57,6 +59,12 @@ class ChatApp(tk.Tk):
         m_set = tk.Menu(menubar, tearoff=0)
         m_set.add_command(label='大模型 API 设置…', command=self.open_settings)
         m_set.add_command(label='查看当前配置', command=self.show_llm_status)
+        m_para = tk.Menu(m_set, tearoff=0)
+        self.para_var = tk.StringVar(value='adaptive')
+        for ptext, pval in (('自适应（推荐）', 'adaptive'), ('ReAct（思考-行动）', 'react'), ('Plan-and-Solve（先规划）', 'plan'), ('Reflection（反思修订）', 'reflection')):
+            m_para.add_radiobutton(label=ptext, value=pval, variable=self.para_var,
+                                   command=lambda: setattr(self, 'paradigm', self.para_var.get()))
+        m_set.add_cascade(label='Agent 范式', menu=m_para)
         menubar.add_cascade(label='设置', menu=m_set)
         m_help = tk.Menu(menubar, tearoff=0)
         m_help.add_command(label='使用说明', command=self.show_help)
@@ -177,7 +185,7 @@ class ChatApp(tk.Tk):
 
         def work():
             try:
-                resp = build_reply(q, self.role, self.checklist_state, self.history, True)
+                resp = build_reply(q, self.role, self.checklist_state, self.history, True, self.paradigm)
             except Exception as e:
                 resp = {'reply': '处理出错：%s' % e, 'role': self.role, 'state': self.checklist_state,
                         'sources': [], 'llm': False, 'model': '', 'llm_error': str(e)}
@@ -188,6 +196,39 @@ class ChatApp(tk.Tk):
 
         threading.Thread(target=work, daemon=True).start()
 
+    def _add_feedback_row(self, reply_text):
+        """第11章：回答下方提供 👍/👎 反馈，写入偏好数据（Agentic-RL 训练备料）"""
+        if not reply_text:
+            return
+        f = tk.Frame(self.body, bg=BG)
+        f.pack(fill='x', pady=(0, 2))
+        tk.Label(f, text='这条回答是否有用？', bg=BG, fg=META_FG, font=FONT_META).pack(side='left')
+
+        def give(rating, btn):
+            question = ''
+            for h in reversed(self.history):
+                if h.get('role') == 'user':
+                    question = h.get('content', '')
+                    break
+            n = memory.record_feedback(question, reply_text, rating)
+            self.status.config(text='已记录%s（共 %d 条偏好数据，用于模型优化）' % ('好评' if rating else '差评', n or 0))
+            for b in (btn_ok, btn_bad):
+                b.config(state='disabled')
+
+        btn_ok = tk.Button(f, text='👍 有用', bg='#ffffff', fg='#3e7c4f', font=FONT_META,
+                           relief='flat', command=lambda: give(1, btn_ok))
+        btn_bad = tk.Button(f, text='👎 待改进', bg='#ffffff', fg='#c0392b', font=FONT_META,
+                            relief='flat', command=lambda: give(0, btn_bad))
+        btn_ok.pack(side='left', padx=(6, 2))
+        btn_bad.pack(side='left')
+        self.after(10, lambda: self.canvas.yview_moveto(1.0))
+
+    def _finish(self, resp):
+        self.role = resp.get('role', self.role)
+        if 'state' in resp:
+            self.checklist_state = resp['state']
+        self.busy = False
+        self.send_btn.config(state='normal')
     def _finish(self, resp):
         self.role = resp.get('role', self.role)
         if 'state' in resp:
@@ -196,6 +237,7 @@ class ChatApp(tk.Tk):
         if resp.get('llm') and resp.get('model'):
             meta = '🤖 ' + resp['model']
         self.add_msg('agent', resp.get('reply', ''), meta=meta, sources=resp.get('sources'))
+        self._add_feedback_row(resp.get('reply', ''))
         steps = resp.get('trace') or []
         if steps:
             self.status.config(text='思考过程：' + ' → '.join(steps[-4:]))

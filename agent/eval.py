@@ -59,25 +59,35 @@ def judge(item, reply, sources):
                 return True, '命中来源 ' + s
     return False, '未命中期望来源：' + '、'.join(item.get('expect', [])) + ('；实际：' + '、'.join(sources[:3]) if sources else '（无来源）')
 
-def run_eval(mode='local'):
+def run_eval(mode='local', qa_set=None, tag=''):
     chunks, idf = load_kb()
     ag = get_agent()
+    qa_set = qa_set or QA_SET
     rows = []
     passed = 0
-    for i, item in enumerate(QA_SET, 1):
-        res = ag.run(item['q'], item['role'], [], use_llm=(mode == 'llm'))
+    groups = {}
+    for i, item in enumerate(qa_set, 1):
+        res = ag.run(item['q'], item.get('role'), [], use_llm=(mode == 'llm'), paradigm=item.get('paradigm', 'adaptive'))
         ok, why = judge(item, res.get('reply', ''), res.get('sources', []))
         if ok:
             passed += 1
+        g = item.get('group', '综合')
+        groups.setdefault(g, [0, 0])
+        groups[g][1] += 1
+        if ok:
+            groups[g][0] += 1
         rows.append({'no': i, 'ok': ok, 'q': item['q'], 'why': why, 'model': res.get('model', ''), 'steps': len(res.get('trace', []))})
         print('[%s] Q%d %s' % ('✓' if ok else '✗', i, item['q'][:40]))
-    total = len(QA_SET)
+    total = len(qa_set)
     rate = passed * 100.0 / total
+    group_summary = {k: '%d/%d' % (v[0], v[1]) for k, v in groups.items()}
     report = {
         'mode': mode,
+        'tag': tag,
         'total': total,
         'passed': passed,
         'rate': round(rate, 1),
+        'groups': group_summary,
         'rows': rows,
     }
     return report
@@ -91,6 +101,11 @@ def write_report(report):
     lines.append('- 模式：%s（local=本地知识库工具路由 / llm=大模型 ReAct 循环）' % report['mode'])
     lines.append('- 评估集：%d 条（个人10 / 集体10 / 企业10）' % report['total'])
     lines.append('- 通过：%d / %d（%.1f%%）' % (report['passed'], report['total'], report['rate']))
+    gs = report.get('groups')
+    if gs:
+        lines.append('- 分组：' + '；'.join('%s %s' % (k, v) for k, v in gs.items()))
+    if report.get('tag'):
+        lines.append('- 标记：' + report['tag'])
     lines.append('')
     lines.append('| # | 结果 | 问题 | 说明 |')
     lines.append('|---|---|---|---|')
@@ -105,6 +120,13 @@ def write_report(report):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode', default='local', choices=['local', 'llm'])
+    parser.add_argument('--custom', default='', help='自定义评估集 JSON 文件（列表，字段 q/role/expect/special/group）')
+    parser.add_argument('--tag', default='', help='报告标记（如版本号）')
     args = parser.parse_args()
-    report = run_eval(args.mode)
+    qa_set = None
+    if args.custom:
+        with open(args.custom, 'r', encoding='utf-8') as f:
+            qa_set = json.load(f)
+        print('使用自定义评估集：%d 条' % len(qa_set))
+    report = run_eval(args.mode, qa_set=qa_set, tag=args.tag)
     write_report(report)
