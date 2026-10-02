@@ -1,0 +1,9 @@
+{
+  "api_base": "https://api.deepseek.com/v1",
+  "api_key": "sk-请在此填写你的API密钥",
+  "model": "deepseek-chat",
+  "enabled": false,
+  "temperature": 0.3,
+  "max_tokens": 1400,
+  "timeout": 90
+}

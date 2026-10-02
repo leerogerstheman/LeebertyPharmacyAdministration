@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LeebertyPharmacyAdministration · 药事管理智能 Agent</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">💊</span>
+      <div>
+        <h1>LeebertyPharmacyAdministration</h1>
+        <p class="sub">药事管理智能 Agent · 本地知识库 × 真实大模型双模式</p>
+      </div>
+    </div>
+    <div class="role-switch">
+      <span class="model-badge" id="modelBadge" title="当前回答模式">🔄 检测中…</span>
+      <span class="role-label">身份：</span>
+      <button class="role-btn" data-role="personal">🧑 个人</button>
+      <button class="role-btn" data-role="org">🏥 集体</button>
+      <button class="role-btn" data-role="company">🏢 公司</button>
+      <button class="role-btn" data-role="clear">重置</button>
+      <button class="role-btn gear" id="gearBtn" title="大模型 API 设置">⚙ 模型</button>
+    </div>
+  </header>
+
+  <main class="chat" id="chat">
+    <div class="msg agent">
+      <div class="bubble">
+        您好！我是<b>药事管理智能助手</b>，基于本地知识库（14 个专题、112 个知识块）服务：<br>
+        · <b>个人</b>：用药咨询、说明书解读、特殊人群用药、不良反应识别、家庭药箱<br>
+        · <b>集体</b>：药事委员会建设、处方点评、麻精药品五专自查、抗菌药物管理<br>
+        · <b>公司</b>：GxP 体系、GSP/GMP、QA/QC、临床试验 CRA/CRC、药物警戒、药物经济学<br><br>
+        点击右上角 <b>⚙ 模型</b> 可配置真实大模型 API（DeepSeek / OpenAI / 智谱 / 通义 / Kimi / Ollama 等），
+        配置后回答将由大模型结合本地知识库生成（RAG 增强）；未配置时自动使用本地知识库回答。
+      </div>
+    </div>
+  </main>
+
+  <footer class="inputbar">
+    <input id="input" type="text" placeholder="输入您的问题，回车发送（help 查看服务；llm 配置大模型）" autocomplete="off">
+    <button id="send">发送</button>
+  </footer>
+  <div class="disclaimer" id="disclaimer"></div>
+</div>
+
+<!-- 大模型设置弹窗 -->
+<div class="modal-mask" id="llmModal">
+  <div class="modal">
+    <div class="modal-head">
+      <h2>🤖 大模型 API 设置</h2>
+      <button class="modal-close" id="modalClose">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="tip">支持任意 OpenAI 兼容接口（/chat/completions）。密钥仅保存在本机 config.json，不会上传。</p>
+      <label>API 地址 (api_base)
+        <input id="cfgBase" placeholder="https://api.deepseek.com/v1">
+      </label>
+      <label>API 密钥 (api_key)
+        <input id="cfgKey" type="password" placeholder="sk-...">
+      </label>
+      <label>模型名 (model)
+        <input id="cfgModel" placeholder="deepseek-chat / gpt-4o-mini / glm-4-flash / qwen-plus 等">
+      </label>
+      <div class="row2">
+        <label>温度 (temperature)
+          <input id="cfgTemp" type="number" step="0.1" min="0" max="2">
+        </label>
+        <label>最大输出 (max_tokens)
+          <input id="cfgTokens" type="number" step="100" min="100" max="8000">
+        </label>
+      </div>
+      <label class="switch-row">
+        <input type="checkbox" id="cfgEnabled"> 启用 AI 模式（问答由大模型结合知识库生成）
+      </label>
+      <div class="test-result" id="testResult"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-ghost" id="testBtn">测试连接</button>
+      <button class="btn-main" id="saveBtn">保存配置</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+# 配置（含密钥）
+config.json
+
+# Python
+__pycache__/
+*.pyc
+
+# 临时文件
+examples/_*
+*.png
