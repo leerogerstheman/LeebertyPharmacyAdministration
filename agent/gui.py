@@ -1,9 +1,13 @@
 # -*- coding: utf-8 -*-
-# gui.py — LeebertyPharmacyAdministration 桌面应用（tkinter 原生窗口，纯标准库，无需浏览器）
-# 启动：python agent/gui.py   或双击 start_app.bat（pythonw 无控制台）
+# gui.py — LeebertyPharmacyAdministration 桌面应用 v4.0（现代 Agent UI）
+# 参考 ChatGPT/Claude/DeepSeek/Coze/Dify 等主流界面：深浅主题、会话侧边栏、能力卡片、
+# Markdown 富文本气泡、流式打字、思考轨迹与来源交互、多行输入
 import os
 import sys
+import re
+import json
 import threading
+import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tkinter as tk
@@ -14,248 +18,634 @@ from server import build_reply
 import llm as llm_mod
 import memory
 
-BG = '#eef4fa'
-USER_BG = '#0b5394'
-USER_FG = '#ffffff'
-AGENT_BG = '#ffffff'
-AGENT_FG = '#24384d'
-AGENT_BORDER = '#dbe7f2'
-META_FG = '#7d94a8'
-SRC_FG = '#4a86b8'
-FONT = ('Microsoft YaHei UI', 10)
-FONT_SMALL = ('Microsoft YaHei UI', 9)
-FONT_META = ('Microsoft YaHei UI', 8)
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+UI_CFG_PATH = os.path.join(ROOT_DIR, 'memory', 'ui.json')
+SESSIONS_PATH = os.path.join(ROOT_DIR, 'memory', 'sessions.json')
 
-CHECKLIST_CHOICES = ['GSP自查（药品经营）', '机构自查（医疗机构）', '五专自查（麻精药品）', '不良反应自查']
+# ---------------- 主题系统（浅色/深色，参考主流 Agent 配色） ----------------
+THEMES = {
+    'light': {
+        'name': '浅色',
+        'bg': '#f5f6f8', 'side': '#ffffff', 'card': '#ffffff',
+        'user_bg': '#0b5394', 'user_fg': '#ffffff',
+        'agent_bg': '#ffffff', 'agent_fg': '#1f2328', 'agent_border': '#e2e8ef',
+        'meta': '#8a94a6', 'accent': '#0b5394', 'accent_bg': '#eaf2fa',
+        'h': '#152233', 'code_bg': '#f2f4f7', 'code_fg': '#b8334b', 'quote': '#6b7a90',
+        'input_bg': '#ffffff', 'input_border': '#d5dde6', 'status': '#8a94a6',
+        'btn_bg': '#ffffff', 'btn_fg': '#2b3a4a', 'hover': '#eef2f7',
+    },
+    'dark': {
+        'name': '深色',
+        'bg': '#1a1b20', 'side': '#202127', 'card': '#26272e',
+        'user_bg': '#2d6cb8', 'user_fg': '#ffffff',
+        'agent_bg': '#26272e', 'agent_fg': '#e8e8ea', 'agent_border': '#34363f',
+        'meta': '#7e8898', 'accent': '#6ea8ff', 'accent_bg': '#2a3550',
+        'h': '#f0f2f5', 'code_bg': '#30323a', 'code_fg': '#ff8fa3', 'quote': '#99a3b5',
+        'input_bg': '#26272e', 'input_border': '#3c3f49', 'status': '#7e8898',
+        'btn_bg': '#2c2e36', 'btn_fg': '#d8dce4', 'hover': '#353843',
+    },
+}
+
+def ui_load():
+    try:
+        with open(UI_CFG_PATH, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {'theme': 'light'}
+
+def ui_save(cfg):
+    try:
+        os.makedirs(os.path.dirname(UI_CFG_PATH), exist_ok=True)
+        with open(UI_CFG_PATH, 'w', encoding='utf-8') as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def load_sessions():
+    try:
+        with open(SESSIONS_PATH, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {'sessions': [], 'current': 0}
+
+def save_sessions(s):
+    try:
+        os.makedirs(os.path.dirname(SESSIONS_PATH), exist_ok=True)
+        with open(SESSIONS_PATH, 'w', encoding='utf-8') as f:
+            json.dump(s, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+# ---------------- Markdown 轻量渲染器 ----------------
+# 支持：标题/粗体/行内代码/代码块/列表/引用/表格（保留文本结构）
+INLINE_BOLD = re.compile(r'\*\*(.+?)\*\*')
+INLINE_CODE = re.compile(r'`([^`]+)`')
+
+def md_segments(md):
+    """Markdown → [(text, tag)] 段序列（供 Text 渲染与流式打字）"""
+    segs = []
+    in_code = False
+    code_lines = []
+    for raw in (md or '').split('\n'):
+        line = raw.rstrip()
+        if line.strip().startswith('```'):
+            if in_code:
+                segs.append(('\n'.join(code_lines), 'code'))
+                code_lines = []
+            in_code = not in_code
+            segs.append(('', 'normal'))
+            continue
+        if in_code:
+            code_lines.append(line)
+            continue
+        if not line.strip():
+            segs.append(('', 'normal'))
+            continue
+        if line.startswith('### '):
+            segs.append((line[4:].strip(), 'h3'))
+            continue
+        if line.startswith('## '):
+            segs.append((line[3:].strip(), 'h2'))
+            continue
+        if line.startswith('# '):
+            segs.append((line[2:].strip(), 'h1'))
+            continue
+        if re.match(r'^\s*[-*]\s+', line):
+            segs.append(('•  ' + re.sub(r'^\s*[-*]\s+', '', line), 'li'))
+            continue
+        if re.match(r'^\s*\d+\.\s+', line):
+            segs.append(('   ' + line.strip(), 'li'))
+            continue
+        if line.strip().startswith('|'):
+            segs.append((line.strip(), 'quote'))
+            continue
+        if line.strip().startswith('>'):
+            segs.append(('💡 ' + line.strip()[1:].strip(), 'quote'))
+            continue
+        # 行内样式：粗体/行内代码
+        out = []
+        pos = 0
+        toks = []
+        for m in INLINE_BOLD.finditer(line):
+            toks.append((line[pos:m.start()], 'normal')); toks.append((m.group(1), 'b')); pos = m.end()
+        if pos < len(line):
+            toks.append((line[pos:], 'normal'))
+        for t, tg in toks:
+            p2 = 0
+            for m in INLINE_CODE.finditer(t):
+                if m.start() > p2:
+                    segs.append((t[p2:m.start()], tg))
+                segs.append((m.group(1), 'code'))
+                p2 = m.end()
+            if p2 < len(t):
+                segs.append((t[p2:], tg))
+    if in_code and code_lines:
+        segs.append(('\n'.join(code_lines), 'code'))
+    if not segs:
+        segs.append((md or '', 'normal'))
+    return segs
+
+def elide(text, n=80):
+    text = text.replace('\n', ' ').strip()
+    return text if len(text) <= n else text[:n] + '…'
+
+FONT = ('Microsoft YaHei UI', 10)
+FONT_B = ('Microsoft YaHei UI', 10, 'bold')
+FONT_S = ('Microsoft YaHei UI', 9)
+FONT_T = ('Microsoft YaHei UI', 8)
+FONT_MONO = ('Consolas', 9)
+
+CARD_PROMPTS = [
+    ('🧑 个人用药咨询', '老年人多重用药要注意什么？', '用药安全顾问'),
+    ('🏥 医院药事建设', '药事管理与药物治疗学委员会有哪些职责？', '机构管理顾问'),
+    ('✅ GSP 合规自查', 'GSP自查', '交互式清单'),
+    ('📐 药物经济学', '成本10000元效果8 vs 成本15000元效果9 方案是否划算？', 'ICER 计算'),
+    ('🔬 深度研究', '深度研究 药品不良反应监测体系', '多路检索报告'),
+    ('👥 虚拟委员会', 'magic 虚拟药事委员会', '多智能体会谈'),
+]
 
 class ChatApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title('LeebertyPharmacyAdministration · 药事管理智能 Agent')
-        self.geometry('1000x720')
-        self.minsize(860, 560)
-        self.configure(bg=BG)
+        self.geometry('1180x760')
+        self.minsize(980, 620)
+        cfg = ui_load()
+        self.theme_name = cfg.get('theme', 'light')
+        self.theme = THEMES.get(self.theme_name, THEMES['light'])
         self.role = None
-        self.history = []
+        self.paradigm = 'adaptive'
         self.checklist_state = None
         self.busy = False
-        self.paradigm = 'adaptive'
+        self.sessions = load_sessions()
         self.chunks, self.idf = load_kb()
+        self._ensure_session()
         self._build_menu()
-        self._build_toolbar()
-        self._build_statusbar()
+        self._build_sidebar()
+        self._build_main()
         self._build_input()
-        self._build_chat()
-        self._welcome()
+        self._build_statusbar()
+        self._apply_theme()
+        self.render_session()
         self.update_badge()
         self.protocol('WM_DELETE_WINDOW', self.on_close)
 
-    # ---------- 菜单 ----------
+    # ------------- 会话管理（侧边栏，仿主流 Agent） -------------
+    def _ensure_session(self):
+        if not self.sessions.get('sessions'):
+            self.sessions['sessions'] = [self._new_session_obj(0)]
+            self.sessions['current'] = 0
+            save_sessions(self.sessions)
+
+    def _new_session_obj(self, idx):
+        return {'id': idx, 'title': '新会话', 'role': None, 'paradigm': 'adaptive', 'history': [], 'state': None, 'created': datetime.datetime.now().strftime('%m-%d %H:%M')}
+
+    def _cur_session(self):
+        s = self.sessions['sessions']
+        i = self.sessions.get('current', 0)
+        return s[i] if s and i < len(s) else s[0]
+
+    def new_session(self, clear_messages=True):
+        s = self.sessions['sessions']
+        s.append(self._new_session_obj(len(s)))
+        self.sessions['current'] = len(s) - 1
+        save_sessions(self.sessions)
+        self._refresh_listbox()
+        if clear_messages:
+            self.render_session()
+
+    def delete_session(self):
+        s = self.sessions['sessions']
+        i = self.sessions.get('current', 0)
+        if len(s) <= 1:
+            messagebox.showinfo('提示', '至少保留一个会话', parent=self)
+            return
+        del s[i]
+        self.sessions['current'] = max(0, i - 1)
+        save_sessions(self.sessions)
+        self._refresh_listbox()
+        self.render_session()
+
+    def open_session(self, idx):
+        if 0 <= idx < len(self.sessions['sessions']):
+            self.sessions['current'] = idx
+            save_sessions(self.sessions)
+            self._refresh_listbox()
+            self.render_session()
+
+    def _refresh_listbox(self):
+        self.side_list.delete(0, 'end')
+        for s in self.sessions['sessions']:
+            title = s.get('title') or '新会话'
+            self.side_list.insert('end', '  ' + elide(title, 14))
+        cur = self.sessions.get('current', 0)
+        if cur < self.side_list.size():
+            self.side_list.selection_set(cur)
+
+    # ------------- 菜单 -------------
     def _build_menu(self):
         menubar = tk.Menu(self)
         m_file = tk.Menu(menubar, tearoff=0)
+        m_file.add_command(label='新建会话', command=self.new_session)
+        m_file.add_separator()
         m_file.add_command(label='退出', command=self.on_close)
         menubar.add_cascade(label='文件', menu=m_file)
+
+        m_view = tk.Menu(menubar, tearoff=0)
+        self.theme_var = tk.StringVar(value=self.theme_name)
+        m_view.add_radiobutton(label='浅色主题', value='light', variable=self.theme_var, command=lambda: self.set_theme('light'))
+        m_view.add_radiobutton(label='深色主题', value='dark', variable=self.theme_var, command=lambda: self.set_theme('dark'))
+        m_view.add_separator()
+        m_para = tk.Menu(m_view, tearoff=0)
+        self.para_var = tk.StringVar(value='adaptive')
+        for ptext in (('自适应（推荐）', 'adaptive'), ('ReAct（思考-行动）', 'react'), ('Plan-and-Solve（先规划）', 'plan'), ('Reflection（反思修订）', 'reflection')):
+            m_para.add_radiobutton(label=ptext[0], value=ptext[1], variable=self.para_var, command=lambda v=ptext[1]: setattr(self, 'paradigm', v))
+        m_view.add_cascade(label='Agent 范式', menu=m_para)
+        menubar.add_cascade(label='视图', menu=m_view)
+
         m_set = tk.Menu(menubar, tearoff=0)
         m_set.add_command(label='大模型 API 设置…', command=self.open_settings)
         m_set.add_command(label='查看当前配置', command=self.show_llm_status)
-        m_para = tk.Menu(m_set, tearoff=0)
-        self.para_var = tk.StringVar(value='adaptive')
-        for ptext, pval in (('自适应（推荐）', 'adaptive'), ('ReAct（思考-行动）', 'react'), ('Plan-and-Solve（先规划）', 'plan'), ('Reflection（反思修订）', 'reflection')):
-            m_para.add_radiobutton(label=ptext, value=pval, variable=self.para_var,
-                                   command=lambda: setattr(self, 'paradigm', self.para_var.get()))
-        m_set.add_cascade(label='Agent 范式', menu=m_para)
         menubar.add_cascade(label='设置', menu=m_set)
+
         m_help = tk.Menu(menubar, tearoff=0)
         m_help.add_command(label='使用说明', command=self.show_help)
         m_help.add_command(label='关于', command=self.show_about)
         menubar.add_cascade(label='帮助', menu=m_help)
         self.config(menu=menubar)
 
-    # ---------- 顶部工具条 ----------
-    def _build_toolbar(self):
-        bar = tk.Frame(self, bg=BG, padx=10, pady=6)
-        bar.pack(side='top', fill='x')
-        role_map = {'personal': '个人', 'org': '机构', 'company': '公司'}
-        for text, role in (('🧑 个人', 'personal'), ('🏥 集体', 'org'), ('🏢 公司', 'company')):
-            b = tk.Button(bar, text=text, width=8, bg='#ffffff', fg='#0b5394',
-                          activebackground='#eaf4fc', relief='flat',
-                          command=lambda r=role: self.send_text('我是' + role_map[r]))
-            b.pack(side='left', padx=3, pady=2)
-        tip = tk.Label(bar, text='自查：', bg=BG, fg='#3d5a72', font=FONT_SMALL)
-        tip.pack(side='left', padx=(12, 2))
-        self.cl_combo = ttk.Combobox(bar, values=CHECKLIST_CHOICES, width=16, state='readonly')
-        self.cl_combo.current(0)
-        self.cl_combo.pack(side='left')
-        tk.Button(bar, text='开始自查', width=8, bg='#ffffff', fg='#0b5394',
-                  activebackground='#eaf4fc', relief='flat', command=self.start_checklist).pack(side='left', padx=3, pady=2)
-        tk.Button(bar, text='📄 模板', bg='#ffffff', fg='#0b5394', activebackground='#eaf4fc',
-                  relief='flat', command=lambda: self.send_text('模板')).pack(side='left', padx=3, pady=2)
-        tk.Button(bar, text='🔄 重置', bg='#ffffff', fg='#0b5394', activebackground='#eaf4fc',
-                  relief='flat', command=lambda: self.send_text('reset')).pack(side='left', padx=3, pady=2)
-        self.badge = tk.Label(bar, text='', bg=BG, fg='#3e7c4f', font=FONT_SMALL)
-        self.badge.pack(side='right')
+    # ------------- 侧边栏（会话列表） -------------
+    def _build_sidebar(self):
+        side = tk.Frame(self, width=232)
+        side.pack(side='left', fill='y')
+        side.pack_propagate(False)
+        tk.Button(side, text='＋ 新建会话', command=self.new_session, relief='flat', font=FONT_S, padx=8, pady=6).pack(fill='x', padx=8, pady=(10, 6))
+        self.side_list = tk.Listbox(side, relief='flat', font=FONT_S, activestyle='none', highlightthickness=0, borderwidth=0)
+        self.side_list.pack(fill='both', expand=True, padx=8, pady=2)
+        self.side_list.bind('<<ListboxSelect>>', self._on_select_session)
+        tk.Button(side, text='🗑 删除当前会话', command=self.delete_session, relief='flat', font=FONT_T, padx=8, pady=4).pack(fill='x', padx=8, pady=6)
 
-    # ---------- 底部输入区与状态栏 ----------
-    def _build_statusbar(self):
-        self.status = tk.Label(self, text='', anchor='w', bg='#ffffff', fg='#8aa2b8',
-                               font=FONT_SMALL, padx=12, pady=3)
-        self.status.pack(side='bottom', fill='x')
+    def _on_select_session(self, event=None):
+        sel = self.side_list.curselection()
+        if sel:
+            self.open_session(sel[0])
 
+    # ------------- 主区域：欢迎卡片 + 消息流 -------------
+    def _build_main(self):
+        main = tk.Frame(self)
+        main.pack(side='left', fill='both', expand=True)
+        self.main = main
+        wrap = tk.Frame(main)
+        wrap.pack(fill='both', expand=True, padx=14, pady=(10, 4))
+        self.chat = tk.Text(wrap, wrap='word', relief='flat', borderwidth=0, font=FONT, cursor='arrow', spacing1=2, spacing3=6)
+        sb = ttk.Scrollbar(wrap, orient='vertical', command=self.chat.yview)
+        self.chat.configure(yscrollcommand=sb.set)
+        sb.pack(side='right', fill='y')
+        self.chat.pack(side='left', fill='both', expand=True)
+        self.chat.bind('<Button-3>', self._chat_menu)
+        self.cards = tk.Frame(wrap)
+        self.cards.place(relx=0.5, rely=0.08, anchor='n', width=720)
+        self._build_cards()
+
+    def _build_cards(self):
+        for w in self.cards.winfo_children():
+            w.destroy()
+        tk.Label(self.cards, text='早上好！今天想咨询什么？', font=('Microsoft YaHei UI', 16, 'bold'), anchor='w').pack(fill='x', pady=(4, 4))
+        tk.Label(self.cards, text='药事管理智能 Agent · 本地知识库 × 工具 × 可选大模型', font=FONT_S, anchor='w').pack(fill='x', pady=(0, 12))
+        grid = tk.Frame(self.cards)
+        grid.pack(fill='x')
+        for i in range(0, len(CARD_PROMPTS), 2):
+            row = tk.Frame(grid)
+            row.pack(fill='x', pady=4)
+            for title, prompt, sub in CARD_PROMPTS[i:i + 2]:
+                card = tk.Frame(row, padx=14, pady=10, highlightthickness=1)
+                card.pack(side='left', fill='x', expand=True, padx=4)
+                tk.Label(card, text=title, font=FONT_B, anchor='w').pack(fill='x')
+                tk.Label(card, text=sub, font=FONT_T, anchor='w').pack(fill='x', pady=(2, 6))
+                tk.Label(card, text='提问 →', font=FONT_T, anchor='w').pack(fill='x')
+                card.bind('<Button-1>', lambda e, p=prompt: self.send_text(p))
+                for child in card.winfo_children():
+                    child.bind('<Button-1>', lambda e, p=prompt: self.send_text(p))
+
+    def hide_cards(self):
+        self.cards.place_forget()
+
+    def show_cards(self):
+        if not self.chat.get('1.0', 'end').strip():
+            self.cards.place(relx=0.5, rely=0.08, anchor='n', width=720)
+
+    # ------------- 消息渲染（Markdown 富文本 + 流式打字） -------------
+    def _tag_config(self):
+        t = self.theme
+        self.chat.tag_config('meta', foreground=t['meta'], font=FONT_T, spacing1=8)
+        self.chat.tag_config('h1', foreground=t['h'], font=('Microsoft YaHei UI', 13, 'bold'), spacing1=8, spacing3=4)
+        self.chat.tag_config('h2', foreground=t['h'], font=('Microsoft YaHei UI', 12, 'bold'), spacing1=6, spacing3=3)
+        self.chat.tag_config('h3', foreground=t['h'], font=FONT_B, spacing1=4)
+        self.chat.tag_config('b', foreground=t['agent_fg'], font=FONT_B)
+        self.chat.tag_config('code', font=FONT_MONO, foreground=t['code_fg'], background=t['code_bg'])
+        self.chat.tag_config('li', foreground=t['agent_fg'], lmargin1=18, lmargin2=14)
+        self.chat.tag_config('quote', foreground=t['quote'], font=FONT_S, lmargin1=10, lmargin2=10)
+        self.chat.tag_config('user', background=t['user_bg'], foreground=t['user_fg'], font=FONT, spacing1=6, spacing3=6, rmargin=48, lmargin1=56, lmargin2=56)
+        self.chat.tag_config('agent', font=FONT, spacing1=6, spacing3=6)
+        self.chat.tag_config('src', foreground=t['accent'], font=FONT_T, spacing1=2)
+        self.chat.tag_config('tool', foreground=t['quote'], font=FONT_T, spacing1=2)
+
+    def _render_md(self, tag, text):
+        """把 markdown 渲染进 Text"""
+        segs = md_segments(text)
+        self.chat.insert('end', '', (tag,))
+        for s, tg in segs:
+            if not s:
+                continue
+            tags = (tag, 'agent') if tg == 'normal' else (tag, tg)
+            self.chat.insert('end', s + '\n', tags)
+        self.chat.insert('end', '', (tag,))
+        self.chat.insert('end', '\n')
+        self.chat.see('end')
+
+    def _stream_render(self, tag, text):
+        """流式打字：逐段揭示已解析的 Markdown（保留样式标签）"""
+        self._stream_segs = md_segments(text)
+        self._stream_idx = 0
+        self.chat.insert('end', '', (tag,))
+        self._stream_tick(tag)
+
+    def _stream_tick(self, tag):
+        if self._stream_idx >= len(self._stream_segs):
+            self.chat.insert('end', '\n')
+            self.chat.see('end')
+            return
+        s, tg = self._stream_segs[self._stream_idx]
+        self._stream_idx += 1
+        if s:
+            tags = (tag, 'agent') if tg == 'normal' else (tag, tg)
+            self.chat.insert('end', s + '\n', tags)
+            self.chat.see('end')
+        delay = 10 if len(s) > 16 else 22
+        self.after(delay, lambda: self._stream_tick(tag))
+
+    def add_user_msg(self, text):
+        self._render_md('user', text)
+
+    def add_agent_msg(self, text, meta=None, sources=None, tool_steps=None, stream=False):
+        if meta:
+            self.chat.insert('end', meta + '\n', 'meta')
+        if stream and len(text) > 90:
+            self._stream_render('agent', text)
+        else:
+            self._render_md('agent', text)
+        if sources:
+            self.chat.insert('end', '📄 来源：' + '；'.join(sources[:3]) + '\n', 'src')
+        if tool_steps:
+            self.chat.insert('end', '🧠 思考过程：' + ' → '.join(tool_steps[:6]), 'tool')
+            self.chat.insert('end', '\n', 'tool')
+        self.chat.see('end')
+
+    def _chat_menu(self, event):
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(label='复制选中', command=lambda: self.chat.event_generate('<<Copy>>'))
+        menu.add_separator()
+        menu.add_command(label='复制全部对话', command=self._copy_all)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _copy_all(self):
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(self.chat.get('1.0', 'end'))
+            self.status.config(text='已复制全部对话')
+        except Exception:
+            pass
+
+    # ------------- 输入区（多行自适应，Enter 发送 / Shift+Enter 换行） -------------
     def _build_input(self):
-        bar = tk.Frame(self, bg='#ffffff', padx=10, pady=8)
-        bar.pack(side='bottom', fill='x')
-        self.entry = tk.Entry(bar, font=FONT, relief='solid', bd=1)
-        self.entry.pack(side='left', fill='x', expand=True, ipady=5)
-        self.entry.bind('<Return>', self.send)
-        self.send_btn = tk.Button(bar, text='发送', width=8, bg='#0b5394', fg='#ffffff',
-                                 activebackground='#0a4480', relief='flat', command=self.send)
-        self.send_btn.pack(side='left', padx=(8, 0))
+        bar = tk.Frame(self)
+        bar.pack(side='bottom', fill='x', padx=14, pady=(0, 8))
+        box = tk.Frame(bar, highlightthickness=1)
+        box.pack(fill='x')
+        self.entry = tk.Text(box, height=2, wrap='word', font=FONT, relief='flat', borderwidth=0, padx=12, pady=8, spacing1=2)
+        self.entry.pack(side='left', fill='x', expand=True)
+        self.entry.bind('<Return>', self._on_enter)
+        self.entry.bind('<KeyRelease>', self._auto_height)
+        self.send_btn = tk.Button(box, text='➤ 发送', width=8, relief='flat', font=FONT_S, pady=6, command=self.send)
+        self.send_btn.pack(side='right', padx=6, pady=6)
+        self.hint = tk.Label(bar, text='Enter 发送 · Shift+Enter 换行 · 支持“GSP自查 / 深度研究 / 模板 / 好评”等指令', font=FONT_T)
+        self.hint.pack(anchor='w', pady=(4, 0))
 
-    # ---------- 聊天区（Canvas 滚动消息流） ----------
-    def _build_chat(self):
-        wrap = tk.Frame(self, bg=BG, padx=10, pady=4)
-        wrap.pack(side='top', fill='both', expand=True)
-        self.canvas = tk.Canvas(wrap, bg=BG, highlightthickness=0)
-        scroll = ttk.Scrollbar(wrap, orient='vertical', command=self.canvas.yview)
-        self.canvas.configure(yscrollcommand=scroll.set)
-        self.body = tk.Frame(self.canvas, bg=BG)
-        self._win = self.canvas.create_window((0, 0), window=self.body, anchor='nw')
-        scroll.pack(side='right', fill='y')
-        self.canvas.pack(side='left', fill='both', expand=True)
-        self.body.bind('<Configure>', lambda e: self.canvas.configure(scrollregion=self.canvas.bbox('all')))
-        self.canvas.bind('<Configure>', self._canvas_resize)
-        self.canvas.bind_all('<MouseWheel>', self._on_wheel)
+    def _on_enter(self, event):
+        if event.state & 0x0001:
+            self.entry.insert('insert', '\n')
+            return 'break'
+        self.send()
+        return 'break'
 
-    def _canvas_resize(self, e):
-        self.canvas.itemconfig(self._win, width=max(300, e.width - 20))
+    def _auto_height(self, event=None):
+        lines = int(self.entry.index('end-1c').split('.')[0])
+        self.entry.configure(height=max(1, min(6, lines)))
 
-    def _on_wheel(self, e):
-        self.canvas.yview_scroll(int(-e.delta / 120), 'units')
-
-    # ---------- 消息渲染 ----------
-    def add_msg(self, who, text, meta=None, sources=None):
-        f = tk.Frame(self.body, bg=BG)
-        f.pack(fill='x', pady=3)
-        meta_text = '你' if who == 'user' else (meta or '📚 本地知识库')
-        tk.Label(f, text=meta_text, bg=BG, fg=META_FG, font=FONT_META).pack(anchor='e' if who == 'user' else 'w')
-        kw = dict(bg=USER_BG if who == 'user' else AGENT_BG,
-                  fg=USER_FG if who == 'user' else AGENT_FG,
-                  font=FONT, justify='left', wraplength=600, padx=12, pady=9)
-        if who == 'agent':
-            kw['highlightthickness'] = 1
-            kw['highlightbackground'] = AGENT_BORDER
-        tk.Label(f, text=text, **kw).pack(anchor='e' if who == 'user' else 'w', pady=(0, 4))
-        for s in (sources or [])[:3]:
-            tk.Label(f, text='📄 ' + s, bg=BG, fg=SRC_FG, font=FONT_META).pack(anchor='w')
-        self.after(10, lambda: self.canvas.yview_moveto(1.0))
-
-    def _welcome(self):
-        n = len(self.chunks)
-        welcome = ('您好！我是药事管理智能助手（本地知识库 %d 个知识块）。\n\n'
-            + '· 🧑 个人：用药咨询、说明书解读、特殊人群用药、家庭药箱\n'
-            + '· 🏥 集体：药事委员会建设、处方点评、麻精五专自查、抗菌药物管理\n'
-            + '· 🏢 公司：GxP 体系、GSP/GMP、QA/QC、临床试验 CRA/CRC、药物警戒、药物经济学\n\n'
-            + '直接输入问题即可（如：四查十对是什么、GSP自查）。'
-            + '点击上方“开始自查”可进行合规自查；菜单“设置→大模型 API 设置”可接入真实大模型。') % n
-        self.add_msg('agent', welcome, meta='💊 LeebertyPharmacyAdministration')
-
-    # ---------- 交互 ----------
+    # ------------- 对话流程 -------------
     def send(self, event=None):
-        q = self.entry.get().strip()
+        q = self.entry.get('1.0', 'end').strip()
         if not q or self.busy:
             return
-        self.entry.delete(0, 'end')
-        self.add_msg('user', q)
-        self._process(q)
+        self.entry.delete('1.0', 'end')
+        self._auto_height()
+        self.send_text(q)
 
     def send_text(self, text):
         if self.busy:
             return
-        self.add_msg('user', text if text != 'reset' else '🔄 重置会话')
+        if text == 'magic 虚拟药事委员会':
+            from multi_agent import MEMBERS, speak
+            self.add_user_msg('👥 召开虚拟药事委员会：' + '基层医疗机构如何提升合理用药')
+            self._run_committee('基层医疗机构如何提升合理用药')
+            return
+        self.add_user_msg(text if text != 'reset' else '🔄 重置会话')
+        self.role = self._cur_session().get('role', self.role)
         self._process(text)
 
-    def start_checklist(self):
-        self.send_text(self.cl_combo.get())
-
-    def _process(self, q):
-        self.busy = True
-        self.send_btn.config(state='disabled')
-        self.status.config(text='思考中…')
+    def _run_committee(self, topic):
+        """第15章：虚拟药事委员会（多智能体会谈）"""
+        self.set_busy(True, '👥 委员会会谈中…')
 
         def work():
+            from multi_agent import speak
+            parts = []
             try:
-                resp = build_reply(q, self.role, self.checklist_state, self.history, True, self.paradigm)
+                for m in MEMBERS:
+                    speech, src = speak(m, topic, self.chunks, self.idf)
+                    parts.append('【%s】\n%s' % (m['name'], speech))
             except Exception as e:
-                resp = {'reply': '处理出错：%s' % e, 'role': self.role, 'state': self.checklist_state,
-                        'sources': [], 'llm': False, 'model': '', 'llm_error': str(e)}
-            try:
-                self.after(0, lambda: self._finish(resp))
-            except Exception:
-                pass
+                parts.append('委员会执行出错：%s' % e)
+            self.after(0, lambda: self._finish_committee('\n\n'.join(parts)))
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _add_feedback_row(self, reply_text):
-        """第11章：回答下方提供 👍/👎 反馈，写入偏好数据（Agentic-RL 训练备料）"""
-        if not reply_text:
-            return
-        f = tk.Frame(self.body, bg=BG)
-        f.pack(fill='x', pady=(0, 2))
-        tk.Label(f, text='这条回答是否有用？', bg=BG, fg=META_FG, font=FONT_META).pack(side='left')
+    def _finish_committee(self, text):
+        self.add_agent_msg(text, meta='👥 虚拟药事委员会', sources=None, tool_steps=['角色会谈 ×3'], stream=False)
+        self.set_busy(False)
+        self._remember_session()
 
-        def give(rating, btn):
-            question = ''
-            for h in reversed(self.history):
-                if h.get('role') == 'user':
-                    question = h.get('content', '')
-                    break
-            n = memory.record_feedback(question, reply_text, rating)
-            self.status.config(text='已记录%s（共 %d 条偏好数据，用于模型优化）' % ('好评' if rating else '差评', n or 0))
-            for b in (btn_ok, btn_bad):
-                b.config(state='disabled')
+    def set_busy(self, b, status=None):
+        self.busy = b
+        self.send_btn.config(state='disabled' if b else 'normal')
+        if status:
+            self.status.config(text=status)
+        if b:
+            self.chat.insert('end', '⏳ 思考中…\n', 'tool')
+            self.chat.see('end')
 
-        btn_ok = tk.Button(f, text='👍 有用', bg='#ffffff', fg='#3e7c4f', font=FONT_META,
-                           relief='flat', command=lambda: give(1, btn_ok))
-        btn_bad = tk.Button(f, text='👎 待改进', bg='#ffffff', fg='#c0392b', font=FONT_META,
-                            relief='flat', command=lambda: give(0, btn_bad))
-        btn_ok.pack(side='left', padx=(6, 2))
-        btn_bad.pack(side='left')
-        self.after(10, lambda: self.canvas.yview_moveto(1.0))
+    def _process(self, q):
+        self.set_busy(True, '思考中…')
+        cur = self._cur_session()
+
+        def work():
+            try:
+                resp = build_reply(q, cur.get('role'), cur.get('state'), cur['history'], True, self.paradigm)
+            except Exception as e:
+                resp = {'reply': '处理出错：%s' % e, 'role': cur.get('role'), 'state': cur.get('state'), 'sources': [], 'llm': False, 'model': '', 'llm_error': str(e), 'trace': ['异常']}
+            self.after(0, lambda: self._finish(resp))
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _finish(self, resp):
-        self.role = resp.get('role', self.role)
-        if 'state' in resp:
-            self.checklist_state = resp['state']
-        self.busy = False
-        self.send_btn.config(state='normal')
-    def _finish(self, resp):
-        self.role = resp.get('role', self.role)
-        if 'state' in resp:
-            self.checklist_state = resp['state']
+        # 移除思考指示器（删除最后以 ⏳ 开头的行）
+        try:
+            content = self.chat.get('1.0', 'end')
+            if '⏳ 思考中…' in content:
+                last = content.rfind('⏳ 思考中…')
+                line_start = content[:last].rfind('\n') + 1
+                self.chat.delete(str(content[:line_start].count('\n') + 1) + '.0', 'end')
+        except Exception:
+            pass
+        cur = self._cur_session()
+        cur['role'] = resp.get('role', cur.get('role'))
+        cur['state'] = resp.get('state')
+        cur['history'] = cur.get('history', [])
         meta = None
         if resp.get('llm') and resp.get('model'):
-            meta = '🤖 ' + resp['model']
-        self.add_msg('agent', resp.get('reply', ''), meta=meta, sources=resp.get('sources'))
-        self._add_feedback_row(resp.get('reply', ''))
-        steps = resp.get('trace') or []
-        if steps:
-            self.status.config(text='思考过程：' + ' → '.join(steps[-4:]))
-        self.busy = False
-        self.send_btn.config(state='normal')
+            meta = '🤖 ' + resp['model'] + (' · 范式 ' + self.paradigm if self.paradigm != 'adaptive' else '')
+        elif resp.get('llm_error'):
+            meta = '📚 本地（AI 调用失败已降级）'
+        trace = resp.get('trace') or []
+        steps = [s for s in trace if '工具' in s or '检索' in s or '范式' in s][:6]
+        self.add_agent_msg(resp.get('reply', ''), meta=meta, sources=resp.get('sources'), tool_steps=steps or None, stream=bool(resp.get('llm')))
+        self._add_feedback_row()
+        old = cur.get('history') or []
+        if len(old) >= 2:
+            cur['title'] = '这是旧会话'
+        if not cur.get('title') or cur.get('title') == '新会话':
+            for h in old:
+                if h.get('role') == 'user':
+                    cur['title'] = elide(h.get('content', ''), 16)
+                    break
+        self._remember_session()
+        self.set_busy(False)
         self.update_badge()
+        self.hide_cards()
         self.entry.focus_set()
 
-    # ---------- 状态与配置 ----------
+    def _add_feedback_row(self):
+        """回答下方 👍/👎（写偏好数据）"""
+        btn_row = tk.Frame(self.main)
+        btn_row.pack(side='bottom', fill='x', padx=14)
+        tk.Label(btn_row, text='这条回答有用吗？', font=FONT_T).pack(side='left')
+        q_text = ''
+        for h in reversed(self._cur_session().get('history', [])):
+            if h.get('role') == 'user':
+                q_text = h.get('content', '')
+                break
+        last_reply = ''
+        for h in reversed(self._cur_session().get('history', [])):
+            if h.get('role') == 'assistant':
+                last_reply = h.get('content', '')
+                break
+
+        def give(rating, b1, b2):
+            n = memory.record_feedback(q_text, last_reply, rating)
+            self.status.config(text='已记录%s（偏好数据共 %d 条，将用于模型优化）' % ('好评' if rating else '差评', n or 0))
+            b1.config(state='disabled')
+            b2.config(state='disabled')
+
+        ok = tk.Button(btn_row, text='👍 有用', font=FONT_T, relief='flat', command=lambda: give(1, ok, bad))
+        bad = tk.Button(btn_row, text='👎 待改进', font=FONT_T, relief='flat', command=lambda: give(0, ok, bad))
+        ok.pack(side='left', padx=4)
+        bad.pack(side='left', padx=2)
+
+    # ------------- 会话渲染（切换/新建时重建消息流） -------------
+    def render_session(self):
+        self.chat.delete('1.0', 'end')
+        cur = self._cur_session()
+        hist = cur.get('history') or []
+        for h in hist:
+            if h.get('role') == 'user':
+                self.add_user_msg(h.get('content', ''))
+            elif h.get('role') == 'assistant':
+                self.add_agent_msg(h.get('content', ''))
+        self._refresh_listbox()
+        self.show_cards()
+        self._apply_theme()
+
+    def _remember_session(self):
+        save_sessions(self.sessions)
+        self._refresh_listbox()
+
+    # ------------- 主题应用 -------------
+    def set_theme(self, name):
+        self.theme_name = name
+        self.theme = THEMES[name]
+        ui_save({'theme': name})
+        self._apply_theme()
+
+    def _apply_theme(self):
+        t = self.theme
+        try:
+            self.configure(bg=t['bg'])
+            self.chat.configure(bg=t['bg'], fg=t['agent_fg'], insertbackground=t['agent_fg'])
+            self.side_list.configure(bg=t['side'], fg=t['h'], selectbackground=t['accent'], selectforeground='#ffffff')
+            self.entry.configure(bg=t['input_bg'], fg=t['agent_fg'], insertbackground=t['agent_fg'])
+            self.hint.configure(bg=t['bg'], fg=t['status'])
+            self.send_btn.configure(bg=t['accent'], fg='#ffffff', activebackground=t['accent'])
+            self.status.configure(bg=t['bg'], fg=t['status'])
+            self.cards.configure(bg=t['bg'])
+            for child in self.side_list.master.winfo_children():
+                if isinstance(child, tk.Button):
+                    child.configure(bg=t['btn_bg'], fg=t['btn_fg'], activebackground=t['hover'])
+            for lbl in self.cards.winfo_children():
+                if isinstance(lbl, tk.Label):
+                    lbl.configure(bg=t['bg'], fg=t['h'])
+            for frame in self.cards.winfo_children():
+                if isinstance(frame, tk.Frame):
+                    for row in frame.winfo_children():
+                        if isinstance(row, tk.Frame):
+                            for card in row.winfo_children():
+                                if isinstance(card, tk.Frame):
+                                    card.configure(bg=t['card'], highlightbackground=t['agent_border'])
+                                    for lbl in card.winfo_children():
+                                        if isinstance(lbl, tk.Label):
+                                            lbl.configure(bg=t['card'], fg=t['agent_fg'])
+            self._tag_config()
+            self.update_idletasks()
+        except Exception:
+            pass
+
+    # ------------- 状态栏 -------------
+    def _build_statusbar(self):
+        self.status = tk.Label(self, text='', anchor='w', font=FONT_T, padx=14, pady=3)
+        self.status.pack(side='bottom', fill='x')
+
     def update_badge(self):
         cfg = llm_mod.load_config()
+        parts = ['知识库 %d 块' % len(self.chunks), '范式 ' + self.paradigm]
         if llm_mod.is_configured(cfg):
-            self.badge.config(text='🤖 AI 模式 · ' + cfg['model'], fg='#0b5394')
-            self.status.config(text='知识库 %d 块 · AI 模式（%s）· 回答由大模型结合知识库生成' % (len(self.chunks), cfg['model']))
+            parts.append('🤖 ' + cfg['model'])
         else:
-            self.badge.config(text='📚 本地知识库模式', fg='#3e7c4f')
-            self.status.config(text='知识库 %d 块 · 未配置大模型（菜单：设置 → 大模型 API 设置）' % len(self.chunks))
+            parts.append('📚 本地模式')
+        self.status.config(text=' | '.join(parts))
 
+    # ------------- 设置：大模型 -------------
     def open_settings(self):
         SettingsDialog(self, on_saved=self.update_badge)
 
@@ -263,32 +653,42 @@ class ChatApp(tk.Tk):
         messagebox.showinfo('大模型配置', llm_mod.status_text(), parent=self)
 
     def show_help(self):
-        messagebox.showinfo('使用说明',
-            '· 直接输入问题：知识问答（如：四查十对是什么、GxP 有哪些规范）\n'
-            + '· 身份按钮：切换个人/集体/公司服务侧重\n'
-            + '· 自查：选择类型后点“开始自查”，逐项输入 是/否，最后给出通过率报告\n'
-            + '· 模板：点击“📄 模板”查看制度/记录/培训模板清单\n'
-            + '· 大模型：菜单“设置 → 大模型 API 设置”，填入密钥并测试连接\n'
-            + '· 重置：清空对话历史与自查状态', parent=self)
+        msg = '\n'.join([
+            '· 提问：直接输入（知识问答 / 四查十对 / ICER 计算…）',
+            '· 能力卡片：点击首页卡片快速发起（自查 / 深度研究 / 虚拟委员会）',
+            '· 会话：左侧列表新建 / 切换 / 删除，自动保存 memory/sessions.json',
+            '· 主题与范式：菜单“视图”切换浅色 / 深色与 Agent 范式',
+            '· 反馈：每条回答下方 👍 / 👎 写入偏好数据',
+            '· 大模型：菜单“设置 → 大模型 API 设置”',
+            '· 指令：help / 模板 / GSP自查 / 深度研究 <主题> / 好评 / 差评',
+        ])
+        messagebox.showinfo('使用说明', msg, parent=self)
 
     def show_about(self):
-        messagebox.showinfo('关于',
-            'LeebertyPharmacyAdministration\n药事管理智能 Agent（桌面版）\n\n'
-            + '面向个人/集体/公司的药事管理科目服务：\n本地知识库 × 可选真实大模型（RAG 增强）。\n\n'
-            + '⚠️ 知识辅助工具，不构成医疗诊断或法律意见；\n用药请遵从医师处方与执业药师指导。', parent=self)
+        msg = '\n'.join([
+            'LeebertyPharmacyAdministration v4.0',
+            '药事管理智能 Agent（现代 UI 版）',
+            '',
+            '本地知识库 × 药剂工具 × 可选大模型（RAG / ReAct）',
+            'UI 参考：ChatGPT / Claude / DeepSeek / Coze / Dify',
+            '',
+            '⚠️ 知识辅助工具，不构成医疗诊断或法律意见。',
+        ])
+        messagebox.showinfo('关于', msg, parent=self)
 
     def on_close(self):
+        save_sessions(self.sessions)
+        ui_save({'theme': self.theme_name})
         self.destroy()
 
 
 class SettingsDialog(tk.Toplevel):
-    """大模型 API 设置对话框（OpenAI 兼容，配置保存到 config.json）"""
+    """大模型 API 设置对话框"""
     def __init__(self, master, on_saved=None):
         super().__init__(master)
         self.title('大模型 API 设置')
-        self.geometry('540x460')
+        self.geometry('560x480')
         self.resizable(False, False)
-        self.configure(bg='#ffffff')
         self.on_saved = on_saved
         cfg = llm_mod.load_config()
         self.var_base = tk.StringVar(value=cfg.get('api_base', ''))
@@ -297,36 +697,34 @@ class SettingsDialog(tk.Toplevel):
         self.var_temp = tk.StringVar(value=str(cfg.get('temperature', 0.3)))
         self.var_tokens = tk.StringVar(value=str(cfg.get('max_tokens', 1400)))
         self.var_enabled = tk.BooleanVar(value=bool(cfg.get('enabled')))
-        body = tk.Frame(self, bg='#ffffff', padx=18, pady=14)
+        body = tk.Frame(self, padx=18, pady=14)
         body.pack(fill='both', expand=True)
-        tk.Label(body, text='支持任意 OpenAI 兼容接口（/chat/completions），如 DeepSeek、OpenAI、智谱、通义、Kimi、Ollama。密钥仅保存在本机 config.json。',
-                 bg='#ffffff', fg='#8aa2b8', font=FONT_META, wraplength=490, justify='left').pack(anchor='w', pady=(0, 10))
+        tk.Label(body, text='支持任意 OpenAI 兼容接口（/chat/completions）：DeepSeek / OpenAI / 智谱 / 通义 / Kimi / Ollama。密钥仅保存在本机 config.json。',
+                 font=FONT_S, wraplength=510, justify='left').pack(anchor='w', pady=(0, 10))
+
         def field(label, var, show=None):
-            row = tk.Frame(body, bg='#ffffff')
+            row = tk.Frame(body)
             row.pack(fill='x', pady=4)
-            tk.Label(row, text=label, width=11, anchor='w', bg='#ffffff', fg='#3d5a72', font=FONT_SMALL).pack(side='left')
-            e = tk.Entry(row, textvariable=var, font=FONT_SMALL, relief='solid', bd=1, show=show)
-            e.pack(side='left', fill='x', expand=True, ipady=3)
-            return e
+            tk.Label(row, text=label, width=11, anchor='w', font=FONT_S).pack(side='left')
+            tk.Entry(row, textvariable=var, font=FONT_S, relief='solid', bd=1, show=show).pack(side='left', fill='x', expand=True, ipady=3)
+
         field('API 地址', self.var_base)
         field('API 密钥', self.var_key, show='*')
         field('模型名', self.var_model)
-        row = tk.Frame(body, bg='#ffffff')
+        row = tk.Frame(body)
         row.pack(fill='x', pady=4)
-        tk.Label(row, text='温度', width=11, anchor='w', bg='#ffffff', fg='#3d5a72', font=FONT_SMALL).pack(side='left')
-        tk.Entry(row, textvariable=self.var_temp, width=8, font=FONT_SMALL, relief='solid', bd=1).pack(side='left', ipady=3)
-        tk.Label(row, text='最大输出 token', bg='#ffffff', fg='#3d5a72', font=FONT_SMALL).pack(side='left', padx=(14, 4))
-        tk.Entry(row, textvariable=self.var_tokens, width=8, font=FONT_SMALL, relief='solid', bd=1).pack(side='left', ipady=3)
-        tk.Checkbutton(body, text='启用 AI 模式（回答由大模型结合本地知识库生成，失败自动回退本地）',
-                       variable=self.var_enabled, bg='#ffffff', fg='#3d5a72', font=FONT_SMALL, anchor='w', justify='left').pack(fill='x', pady=(10, 2))
-        self.test_label = tk.Label(body, text='', bg='#ffffff', fg='#3e7c4f', font=FONT_SMALL, wraplength=490, justify='left')
+        tk.Label(row, text='温度', width=11, anchor='w', font=FONT_S).pack(side='left')
+        tk.Entry(row, textvariable=self.var_temp, width=8, font=FONT_S, relief='solid', bd=1).pack(side='left', ipady=3)
+        tk.Label(row, text='最大输出 token', font=FONT_S).pack(side='left', padx=(14, 4))
+        tk.Entry(row, textvariable=self.var_tokens, width=8, font=FONT_S, relief='solid', bd=1).pack(side='left', ipady=3)
+        tk.Checkbutton(body, text='启用 AI 模式（回答由大模型结合知识库生成，失败自动回退本地）',
+                       variable=self.var_enabled, font=FONT_S, anchor='w', justify='left').pack(fill='x', pady=(10, 2))
+        self.test_label = tk.Label(body, text='', font=FONT_S, wraplength=510, justify='left')
         self.test_label.pack(anchor='w', pady=(8, 0))
-        foot = tk.Frame(self, bg='#f5f9fc', padx=18, pady=10)
-        foot.pack(fill='x', side='bottom')
-        tk.Button(foot, text='测试连接', bg='#ffffff', fg='#0b5394', relief='flat',
-                  command=self.test_conn).pack(side='left')
-        tk.Button(foot, text='保存配置', bg='#0b5394', fg='#ffffff', relief='flat',
-                  command=self.save).pack(side='right')
+        foot = tk.Frame(self)
+        foot.pack(fill='x', side='bottom', padx=18, pady=10)
+        tk.Button(foot, text='测试连接', relief='flat', command=self.test_conn).pack(side='left')
+        tk.Button(foot, text='保存配置', relief='flat', command=self.save).pack(side='right')
         self.transient(master)
         self.grab_set()
         self.focus_set()
@@ -341,17 +739,13 @@ class SettingsDialog(tk.Toplevel):
         }
 
     def test_conn(self):
-        self.test_label.config(text='测试连接中…', fg='#8aa2b8')
+        self.test_label.config(text='测试连接中…')
 
         def work():
             ok, msg = llm_mod.test_connection(self._cfg_from_vars())
-            self.after(0, lambda: self._on_test(ok, msg))
+            self.after(0, lambda: self.test_label.config(text=('✅ ' + msg) if ok else ('❌ ' + msg)))
 
         threading.Thread(target=work, daemon=True).start()
-
-    def _on_test(self, ok, msg):
-        self.test_label.config(text=('✅ ' + msg) if ok else ('❌ ' + msg),
-                               fg='#3e7c4f' if ok else '#c0392b')
 
     def save(self):
         cfg = llm_mod.load_config()
@@ -361,10 +755,7 @@ class SettingsDialog(tk.Toplevel):
         llm_mod.save_config(cfg)
         if self.on_saved:
             self.on_saved()
-        if llm_mod.is_configured(cfg):
-            msg = '✅ AI 模式已启用（' + cfg['model'] + '）'
-        else:
-            msg = '⚠️ 已保存但未启用（需填写地址/密钥/模型并勾选启用）'
+        msg = ('✅ AI 模式已启用（' + cfg['model'] + '）') if llm_mod.is_configured(cfg) else '⚠️ 已保存但未启用（需填写地址/密钥/模型并勾选启用）'
         messagebox.showinfo('保存成功', msg, parent=self)
         if llm_mod.is_configured(cfg):
             self.destroy()
@@ -372,7 +763,6 @@ class SettingsDialog(tk.Toplevel):
 
 def main():
     if '--smoke' in sys.argv:
-        # 自检模式：验证核心链路后自动退出（无窗口交互，需用 python 运行以输出结果）
         app = ChatApp()
         app.withdraw()
         history = []
@@ -383,8 +773,7 @@ def main():
         s1 = build_reply('是', None, s.get('state'), history, False)
         ok = bool(r1.get('reply')) and bool(r2.get('reply')) and r3.get('role') == 'company'
         ok = ok and bool(s.get('state')) and bool(s1.get('reply'))
-        print('SMOKE_RESULT=%s chunks=%d role=%s checklist_step=%s'
-              % (ok, len(app.chunks), r3.get('role'), bool(s1.get('reply'))))
+        print('SMOKE_RESULT=%s chunks=%d md_segs=%d' % (ok, len(app.chunks), len(md_segments(r1.get('reply', '')))))
         app.destroy()
         return
     app = ChatApp()
