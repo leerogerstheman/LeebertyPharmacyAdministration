@@ -37,6 +37,15 @@
 └── docs/            # 药事管理调研报告（含来源）
 ```
 
+## 🧠 Agent 架构（借鉴 Datawhale hello-agents 方法论）
+
+- **范式**：ReAct（默认）/ Plan-and-Solve / Reflection 三档；LLM 模式下执行"思考→工具→观察→回答"循环，最多 4 轮工具调用
+- **工具集**（结构化注册，文本协议 `[TOOL_CALL:名称:参数]`）：`kb_search` 知识检索、`icer_calc` 药物经济学 ICER 计算器、`adr_quick` 不良反应时限速查、`law_lookup` 法规速查、`template_list` 模板、`checklist_router` 自查
+- **双模式一致**：未配置大模型时由本地规则引擎路由同一套工具（含主题加权检索），回答质量与工具能力保持一致
+- **记忆**：短期会话窗口 + 用户画像长期记忆（`memory/profile.json` 跨会话记住身份与关注点）
+- **评估**：`python agent/eval.py` 内置 30 题评估集（个人/集体/企业各 10），输出 `examples/eval_report.md`（本地模式：30/30 通过）
+- **可观测**：每次问答返回思考轨迹 trace，GUI 状态栏 / CLI / Web API 均可查看推理过程
+
 ## ⚠️ 免责声明
 
 知识辅助工具，不构成医疗诊断或法律意见；用药请遵从医师处方与执业药师指导，合规问题以现行有效法规及属地监管部门为准。

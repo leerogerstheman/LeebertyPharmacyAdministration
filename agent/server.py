@@ -6,6 +6,12 @@ import json
 import argparse
 import threading
 import webbrowser
+
+try:
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+except Exception:
+    pass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
@@ -15,6 +21,7 @@ from services import (detect_intent, pick_role, ROLE_NAME, ROLE_OPENING,
                       CHECKLISTS, checklist_start, checklist_step, checklist_report,
                       list_templates, match_checklist)
 import llm as llm_mod
+from agent_core import get_agent
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEB_DIR = os.path.join(ROOT, 'web')
@@ -88,36 +95,15 @@ def build_reply(message, role, state, history, use_llm):
     intents = detect_intent(q)
     role = pick_role(intents, role)
     resp['role'] = role
-    # 本地检索
-    answer = make_answer(q, chunks, idf)
-    for line in (answer or '').split('\n'):
-        if line.startswith('来源：'):
-            resp['sources'].append(line[3:].strip())
-    # AI 模式：真实大模型基于知识库作答
-    if use_llm and answer and llm_mod.is_configured():
-        cfg = llm_mod.load_config()
-        text, srcs, ok, err = llm_mod.answer_with_llm(q, chunks, idf, history, role)
-        if ok and text:
-            resp['reply'] = text
-            resp['llm'] = True
-            resp['model'] = cfg['model']
-            if srcs:
-                resp['sources'] = srcs
-            history.append({'role': 'assistant', 'content': text})
-        else:
-            resp['llm_error'] = err or '未知错误'
-            if answer:
-                resp['reply'] = answer + '\n\n⚠️ AI 调用失败（%s），以上为本地知识库回答。' % (err or '')
-            else:
-                resp['reply'] = 'AI 调用失败（%s），且本地未检索到相关内容。' % (err or '')
-            history.append({'role': 'assistant', 'content': resp['reply']})
-    elif answer:
-        resp['reply'] = answer
-        history.append({'role': 'assistant', 'content': answer})
-        if 'personal' in intents or role == 'personal':
-            resp['reply'] += '\n\n⚠️ 用药安全提示：请遵医嘱用药；出现严重不良反应（呼吸急促、皮疹加重、意识障碍等）立即就医。'
-    else:
-        resp['reply'] = '未在知识库中找到相关内容。可尝试更具体的药名/法规名，或输入“help”查看服务，输入“模板”获取模板；已配置大模型时可获得 AI 扩展回答。'
+    # Agent 引擎：ReAct/规划/反思范式 + 工具循环（无 LLM 时本地工具路由）
+    agent_result = get_agent().run(q, role, history, bool(use_llm))
+    resp['reply'] = agent_result.get('reply', '')
+    resp['sources'] = agent_result.get('sources') or resp['sources']
+    resp['llm'] = agent_result.get('llm', False)
+    resp['model'] = agent_result.get('model', '')
+    resp['llm_error'] = agent_result.get('llm_error')
+    resp['trace'] = agent_result.get('trace', [])
+    history.append({'role': 'assistant', 'content': resp['reply']})
     if len(history) > 24:
         del history[: len(history) - 24]
     return resp

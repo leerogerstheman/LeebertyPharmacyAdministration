@@ -196,6 +196,9 @@ class ChatApp(tk.Tk):
         if resp.get('llm') and resp.get('model'):
             meta = '🤖 ' + resp['model']
         self.add_msg('agent', resp.get('reply', ''), meta=meta, sources=resp.get('sources'))
+        steps = resp.get('trace') or []
+        if steps:
+            self.status.config(text='思考过程：' + ' → '.join(steps[-4:]))
         self.busy = False
         self.send_btn.config(state='normal')
         self.update_badge()

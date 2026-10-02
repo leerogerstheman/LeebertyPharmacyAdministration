@@ -14,6 +14,7 @@ from engine import load_kb, make_answer
 from services import (detect_intent, pick_role, ROLE_NAME, ROLE_OPENING,
                       CHECKLISTS, checklist_start, checklist_step, checklist_report,
                       list_templates, match_checklist)
+from agent_core import get_agent
 import llm as llm_mod
 
 BANNER = '''
@@ -172,27 +173,13 @@ def main():
         intents = detect_intent(q)
         role = pick_role(intents, role)
         history.append({'role': 'user', 'content': q})
-        answer = make_answer(q, chunks, idf)
-        ai_used = False
-        if llm_mod.is_configured() and answer:
-            print('（AI 模式思考中…）')
-            text, srcs, ok, err = llm_mod.answer_with_llm(q, chunks, idf, history, role)
-            if ok and text:
-                print('\n[AI·%s] %s' % (llm_mod.load_config().get('model'), text))
-                if srcs:
-                    print('参考来源：%s' % '；'.join(srcs))
-                history.append({'role': 'assistant', 'content': text})
-                ai_used = True
-            else:
-                print('⚠️ AI 调用失败（%s），已切换本地模式。' % (err or '未知错误'))
-        if not ai_used:
-            if answer:
-                print('\n[本地知识库] ' + answer)
-                history.append({'role': 'assistant', 'content': answer})
-                if 'personal' in intents or role == 'personal':
-                    print('\n⚠️ 用药安全提示：请遵医嘱用药；出现严重不良反应（呼吸急促、皮疹加重、意识障碍等）立即就医。')
-            else:
-                print('\n未在知识库中找到相关内容。可尝试：\n  1. 换一种说法（更具体的药名/法规名/主题词）\n  2. 输入“help”查看服务能力\n  3. 输入“模板”获取制度/记录模板\n  4. 输入“llm”配置大模型以获得 AI 扩展回答')
+        result = get_agent().run(q, role, history, llm_mod.is_configured())
+        for step in result.get('trace', []):
+            print('  · ' + step)
+        print('\n' + result.get('reply', ''))
+        if result.get('sources'):
+            print('参考来源：' + '；'.join(result['sources']))
+        history.append({'role': 'assistant', 'content': result.get('reply', '')})
         if len(history) > 24:
             del history[: len(history) - 24]
 
