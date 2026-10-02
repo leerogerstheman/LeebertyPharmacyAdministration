@@ -5,7 +5,7 @@ import os
 import json
 import datetime
 
-MEMORY_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'memory')
+from paths import MEMORY_DIR
 PROFILE_PATH = os.path.join(MEMORY_DIR, 'profile.json')
 MAX_TOPICS = 12
 

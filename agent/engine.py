@@ -6,7 +6,7 @@ import re
 import math
 from collections import Counter
 
-KB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'knowledge_base')
+from paths import KB_DIR
 CHUNK_MIN_LEN = 40
 TOP_K_DEFAULT = 3
 

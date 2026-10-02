@@ -4,7 +4,7 @@
 import os
 import re
 
-SERVICE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'services')
+from paths import SERVICE_DIR
 TEMPLATE_DIR = os.path.join(SERVICE_DIR, 'templates')
 
 PATTERNS = {

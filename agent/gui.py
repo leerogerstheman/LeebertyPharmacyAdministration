@@ -24,9 +24,9 @@ from server import build_reply
 import llm as llm_mod
 import memory
 
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-UI_CFG_PATH = os.path.join(ROOT_DIR, 'memory', 'ui.json')
-SESSIONS_PATH = os.path.join(ROOT_DIR, 'memory', 'sessions.json')
+from paths import MEMORY_DIR
+UI_CFG_PATH = os.path.join(MEMORY_DIR, 'ui.json')
+SESSIONS_PATH = os.path.join(MEMORY_DIR, 'sessions.json')
 
 # ---------------- 主题系统（浅色/深色，参考主流 Agent 配色） ----------------
 THEMES = {
@@ -327,22 +327,25 @@ class ChatApp(tk.Tk):
     def _build_cards(self):
         for w in self.cards.winfo_children():
             w.destroy()
-        tk.Label(self.cards, text='早上好！今天想咨询什么？', font=('Microsoft YaHei UI', 16, 'bold'), anchor='w').pack(fill='x', pady=(4, 4))
-        tk.Label(self.cards, text='药事管理智能 Agent · 本地知识库 × 工具 × 可选大模型', font=FONT_S, anchor='w').pack(fill='x', pady=(0, 12))
+        self.card_prompts = CARD_PROMPTS
+        tk.Label(self.cards, text='早上好！今天想咨询什么？', font=('Microsoft YaHei UI', 15, 'bold'), anchor='w').pack(fill='x', pady=(6, 4))
+        tk.Label(self.cards, text='药事管理智能 Agent · 本地知识库 × 药剂工具 × 可选大模型', font=FONT_S, anchor='w').pack(fill='x', pady=(0, 14))
         grid = tk.Frame(self.cards)
         grid.pack(fill='x')
-        for i in range(0, len(CARD_PROMPTS), 2):
-            row = tk.Frame(grid)
-            row.pack(fill='x', pady=4)
-            for title, prompt, sub in CARD_PROMPTS[i:i + 2]:
-                card = tk.Frame(row, padx=14, pady=10, highlightthickness=1)
-                card.pack(side='left', fill='x', expand=True, padx=4)
-                tk.Label(card, text=title, font=FONT_B, anchor='w').pack(fill='x')
-                tk.Label(card, text=sub, font=FONT_T, anchor='w').pack(fill='x', pady=(2, 6))
-                tk.Label(card, text='提问 →', font=FONT_T, anchor='w').pack(fill='x')
-                card.bind('<Button-1>', lambda e, p=prompt: self.send_text(p))
-                for child in card.winfo_children():
-                    child.bind('<Button-1>', lambda e, p=prompt: self.send_text(p))
+        grid.columnconfigure(0, weight=1)
+        grid.columnconfigure(1, weight=1)
+        for idx, (title, prompt, sub) in enumerate(self.card_prompts):
+            r, c = divmod(idx, 2)
+            card = tk.Frame(grid, padx=14, pady=10, highlightthickness=1, cursor='hand2')
+            card.grid(row=r, column=c, sticky='nsew', padx=5, pady=5)
+            head = tk.Frame(card)
+            head.pack(fill='x')
+            tk.Label(head, text=title, font=FONT_B, anchor='w').pack(side='left')
+            tk.Button(head, text='提问 →', font=FONT_T, relief='flat', padx=2,
+                      command=lambda q=prompt: self.send_text(q)).pack(side='right')
+            body = tk.Label(card, text=sub, font=FONT_S, anchor='w', wraplength=300, justify='left')
+            body.pack(fill='x', pady=(6, 0))
+
 
     def hide_cards(self):
         self.cards.place_forget()
@@ -797,7 +800,17 @@ def main():
         s1 = build_reply('是', None, s.get('state'), history, False)
         ok = bool(r1.get('reply')) and bool(r2.get('reply')) and r3.get('role') == 'company'
         ok = ok and bool(s.get('state')) and bool(s1.get('reply'))
-        print('SMOKE_RESULT=%s chunks=%d md_segs=%d' % (ok, len(app.chunks), len(md_segments(r1.get('reply', '')))))
+        msg = 'SMOKE_RESULT=%s chunks=%d md_segs=%d base=%s' % (ok, len(app.chunks), len(md_segments(r1.get('reply', ''))), __import__('paths').BASE)
+        try:
+            print(msg)
+        except Exception:
+            pass
+        try:
+            os.makedirs(MEMORY_DIR, exist_ok=True)
+            with open(os.path.join(MEMORY_DIR, 'smoke_result.txt'), 'w', encoding='utf-8') as f:
+                f.write(msg)
+        except Exception:
+            pass
         app.destroy()
         return
     app = ChatApp()

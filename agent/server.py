@@ -24,8 +24,7 @@ import llm as llm_mod
 import memory
 from agent_core import get_agent
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-WEB_DIR = os.path.join(ROOT, 'web')
+from paths import WEB_DIR
 
 DISCLAIMER = '⚠️ 本助手为药事管理知识辅助工具，不构成医疗诊断或法律意见；用药请遵从医师处方与执业药师指导，合规问题以现行法规及属地监管部门为准。'
 

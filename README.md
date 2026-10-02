@@ -4,6 +4,13 @@
 
 基于本地知识库（14 个专题、112 个知识块）提供知识问答、合规自查与模板导航；可选接入真实大模型（OpenAI 兼容协议，RAG 增强），未配置时自动降级纯本地模式。
 
+## 🚀 直接运行（免安装 exe）
+
+- 双击项目根 `LeebertyPharmacyAdministration.exe`（单文件、无需 Python）即可启动桌面应用
+- 或运行 `create_shortcut.bat` 在桌面创建快捷方式
+- `start_app.bat` 自动优先调用 exe，无 exe 时回退 pythonw
+- exe 内置知识库/模板/前端资源；会话记忆与偏好反馈保存在 exe 同目录 `memory/`
+
 ## 🚀 快速开始
 
 > 环境：Windows + Python 3.8+（仅标准库，无需 pip 安装）

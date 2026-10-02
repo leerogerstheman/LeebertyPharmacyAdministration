@@ -6,8 +6,7 @@ import json
 import urllib.request
 import urllib.error
 
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CONFIG_PATH = os.path.join(ROOT_DIR, 'config.json')
+from paths import CONFIG_PATH
 
 DEFAULTS = {
     'api_base': 'https://api.deepseek.com/v1',
