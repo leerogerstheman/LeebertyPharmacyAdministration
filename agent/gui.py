@@ -9,6 +9,12 @@ import json
 import threading
 import datetime
 
+try:
+    import ctypes
+    ctypes.windll.shcore.SetProcessDpiAwareness(1)  # 系统缩放不再虚拟化拉伸窗口
+except Exception:
+    pass
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -168,7 +174,7 @@ class ChatApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title('LeebertyPharmacyAdministration · 药事管理智能 Agent')
-        self.geometry('1180x760')
+        self.geometry('1240x780')
         self.minsize(980, 620)
         cfg = ui_load()
         self.theme_name = cfg.get('theme', 'light')
@@ -183,8 +189,6 @@ class ChatApp(tk.Tk):
         self._build_menu()
         self._build_sidebar()
         self._build_main()
-        self._build_input()
-        self._build_statusbar()
         self._apply_theme()
         self.render_session()
         self.update_badge()
@@ -292,19 +296,32 @@ class ChatApp(tk.Tk):
 
     # ------------- 主区域：欢迎卡片 + 消息流 -------------
     def _build_main(self):
-        main = tk.Frame(self)
+        # ChatGPT 式右列：状态栏(底) → 输入区(底) → 消息区(顶部填满)
+        main = tk.Frame(self, padx=0, pady=0)
         main.pack(side='left', fill='both', expand=True)
         self.main = main
+        self.status = tk.Label(main, text='', anchor='w', font=FONT_T, padx=16, pady=3)
+        self.status.pack(side='bottom', fill='x')
+        self.hint = tk.Label(main, text='Enter 发送 · Shift+Enter 换行 · 指令：GSP自查 / 深度研究 / 模板 / 好评', font=FONT_T, anchor='w', padx=16)
+        self.hint.pack(side='bottom', fill='x', pady=(0, 4))
+        ibar = tk.Frame(main, highlightthickness=1)
+        ibar.pack(side='bottom', fill='x', padx=14, pady=(0, 8))
+        self.entry = tk.Text(ibar, height=2, wrap='word', font=FONT, relief='flat', borderwidth=0, padx=12, pady=8)
+        self.entry.pack(side='left', fill='x', expand=True)
+        self.entry.bind('<Return>', self._on_enter)
+        self.entry.bind('<KeyRelease>', self._auto_height)
+        self.send_btn = tk.Button(ibar, text='➤ 发送', width=8, relief='flat', font=FONT_S, pady=6, command=self.send)
+        self.send_btn.pack(side='right', padx=6, pady=6)
         wrap = tk.Frame(main)
-        wrap.pack(fill='both', expand=True, padx=14, pady=(10, 4))
+        wrap.pack(side='top', fill='both', expand=True, padx=14, pady=(10, 4))
         self.chat = tk.Text(wrap, wrap='word', relief='flat', borderwidth=0, font=FONT, cursor='arrow', spacing1=2, spacing3=6)
         sb = ttk.Scrollbar(wrap, orient='vertical', command=self.chat.yview)
         self.chat.configure(yscrollcommand=sb.set)
         sb.pack(side='right', fill='y')
         self.chat.pack(side='left', fill='both', expand=True)
         self.chat.bind('<Button-3>', self._chat_menu)
-        self.cards = tk.Frame(wrap)
-        self.cards.place(relx=0.5, rely=0.08, anchor='n', width=720)
+        self.cards = tk.Frame(main)
+        self.cards.place(relx=0.5, rely=0.05, anchor='n', relwidth=0.92)
         self._build_cards()
 
     def _build_cards(self):
@@ -332,7 +349,7 @@ class ChatApp(tk.Tk):
 
     def show_cards(self):
         if not self.chat.get('1.0', 'end').strip():
-            self.cards.place(relx=0.5, rely=0.08, anchor='n', width=720)
+            self.cards.place(relx=0.5, rely=0.05, anchor='n', relwidth=0.92)
 
     # ------------- 消息渲染（Markdown 富文本 + 流式打字） -------------
     def _tag_config(self):
@@ -420,20 +437,13 @@ class ChatApp(tk.Tk):
             pass
 
     # ------------- 输入区（多行自适应，Enter 发送 / Shift+Enter 换行） -------------
-    def _build_input(self):
-        bar = tk.Frame(self)
-        bar.pack(side='bottom', fill='x', padx=14, pady=(0, 8))
-        box = tk.Frame(bar, highlightthickness=1)
-        box.pack(fill='x')
-        self.entry = tk.Text(box, height=2, wrap='word', font=FONT, relief='flat', borderwidth=0, padx=12, pady=8, spacing1=2)
-        self.entry.pack(side='left', fill='x', expand=True)
-        self.entry.bind('<Return>', self._on_enter)
-        self.entry.bind('<KeyRelease>', self._auto_height)
-        self.send_btn = tk.Button(box, text='➤ 发送', width=8, relief='flat', font=FONT_S, pady=6, command=self.send)
-        self.send_btn.pack(side='right', padx=6, pady=6)
-        self.hint = tk.Label(bar, text='Enter 发送 · Shift+Enter 换行 · 支持“GSP自查 / 深度研究 / 模板 / 好评”等指令', font=FONT_T)
-        self.hint.pack(anchor='w', pady=(4, 0))
+    # _build_input 已并入 _build_main（ChatGPT 式右列布局）
 
+
+    # _build_statusbar 已并入 _build_main
+
+
+    # ------------- 输入区交互 -------------
     def _on_enter(self, event):
         if event.state & 0x0001:
             self.entry.insert('insert', '\n')
@@ -458,20 +468,17 @@ class ChatApp(tk.Tk):
         if self.busy:
             return
         if text == 'magic 虚拟药事委员会':
-            from multi_agent import MEMBERS, speak
-            self.add_user_msg('👥 召开虚拟药事委员会：' + '基层医疗机构如何提升合理用药')
+            self.add_user_msg('👥 召开虚拟药事委员会：基层医疗机构如何提升合理用药')
             self._run_committee('基层医疗机构如何提升合理用药')
             return
         self.add_user_msg(text if text != 'reset' else '🔄 重置会话')
-        self.role = self._cur_session().get('role', self.role)
         self._process(text)
 
     def _run_committee(self, topic):
-        """第15章：虚拟药事委员会（多智能体会谈）"""
         self.set_busy(True, '👥 委员会会谈中…')
 
         def work():
-            from multi_agent import speak
+            from multi_agent import speak, MEMBERS
             parts = []
             try:
                 for m in MEMBERS:
@@ -484,7 +491,7 @@ class ChatApp(tk.Tk):
         threading.Thread(target=work, daemon=True).start()
 
     def _finish_committee(self, text):
-        self.add_agent_msg(text, meta='👥 虚拟药事委员会', sources=None, tool_steps=['角色会谈 ×3'], stream=False)
+        self.add_agent_msg(text, meta='👥 虚拟药事委员会', tool_steps=['角色会谈 ×3'])
         self.set_busy(False)
         self._remember_session()
 
@@ -501,85 +508,100 @@ class ChatApp(tk.Tk):
         self.set_busy(True, '思考中…')
         cur = self._cur_session()
 
-        def work():
+        def handle(resp):
+            try:
+                self._finish(resp)
+            except Exception as e:
+                self.status.config(text='渲染错误：%s' % e)
+
+        if llm_mod.is_configured():
+            # AI 模式：网络调用放后台线程，避免阻塞 UI
+            def work():
+                try:
+                    resp = build_reply(q, cur.get('role'), cur.get('state'), cur['history'], True, self.paradigm)
+                except Exception as e:
+                    resp = {'reply': '处理出错：%s' % e, 'role': cur.get('role'), 'state': cur.get('state'), 'sources': [], 'llm': False, 'model': '', 'llm_error': str(e), 'trace': ['异常']}
+                try:
+                    self.after(0, lambda: handle(resp))
+                except Exception:
+                    pass
+            threading.Thread(target=work, daemon=True).start()
+        else:
+            # 本地模式：主线程同步执行（毫秒级），规避 tkinter 跨线程限制
             try:
                 resp = build_reply(q, cur.get('role'), cur.get('state'), cur['history'], True, self.paradigm)
             except Exception as e:
                 resp = {'reply': '处理出错：%s' % e, 'role': cur.get('role'), 'state': cur.get('state'), 'sources': [], 'llm': False, 'model': '', 'llm_error': str(e), 'trace': ['异常']}
-            self.after(0, lambda: self._finish(resp))
+            handle(resp)
 
-        threading.Thread(target=work, daemon=True).start()
-
-    def _finish(self, resp):
-        # 移除思考指示器（删除最后以 ⏳ 开头的行）
+    def _remove_thinking(self):
         try:
-            content = self.chat.get('1.0', 'end')
-            if '⏳ 思考中…' in content:
-                last = content.rfind('⏳ 思考中…')
-                line_start = content[:last].rfind('\n') + 1
-                self.chat.delete(str(content[:line_start].count('\n') + 1) + '.0', 'end')
+            content = self.chat.get('1.0', 'end').rstrip()
+            idx = content.rfind('⏳ 思考中…')
+            if idx >= 0:
+                pre = content[:idx]
+                self.chat.delete('%d.%d' % (pre.count('\n') + 1, 0), 'end')
         except Exception:
             pass
+
+    def _finish(self, resp):
+        self._remove_thinking()
         cur = self._cur_session()
         cur['role'] = resp.get('role', cur.get('role'))
         cur['state'] = resp.get('state')
-        cur['history'] = cur.get('history', [])
         meta = None
         if resp.get('llm') and resp.get('model'):
-            meta = '🤖 ' + resp['model'] + (' · 范式 ' + self.paradigm if self.paradigm != 'adaptive' else '')
+            meta = '🤖 ' + resp['model']
         elif resp.get('llm_error'):
             meta = '📚 本地（AI 调用失败已降级）'
         trace = resp.get('trace') or []
-        steps = [s for s in trace if '工具' in s or '检索' in s or '范式' in s][:6]
+        steps = [x for x in trace if ('工具' in x or '检索' in x or '范式' in x)][:6]
         self.add_agent_msg(resp.get('reply', ''), meta=meta, sources=resp.get('sources'), tool_steps=steps or None, stream=bool(resp.get('llm')))
-        self._add_feedback_row()
-        old = cur.get('history') or []
-        if len(old) >= 2:
-            cur['title'] = '这是旧会话'
         if not cur.get('title') or cur.get('title') == '新会话':
-            for h in old:
+            for h in cur.get('history', []):
                 if h.get('role') == 'user':
                     cur['title'] = elide(h.get('content', ''), 16)
                     break
         self._remember_session()
+        self._add_feedback_row()
         self.set_busy(False)
         self.update_badge()
         self.hide_cards()
         self.entry.focus_set()
 
     def _add_feedback_row(self):
-        """回答下方 👍/👎（写偏好数据）"""
-        btn_row = tk.Frame(self.main)
-        btn_row.pack(side='bottom', fill='x', padx=14)
-        tk.Label(btn_row, text='这条回答有用吗？', font=FONT_T).pack(side='left')
+        cur = self._cur_session()
         q_text = ''
-        for h in reversed(self._cur_session().get('history', [])):
-            if h.get('role') == 'user':
-                q_text = h.get('content', '')
-                break
         last_reply = ''
-        for h in reversed(self._cur_session().get('history', [])):
+        for h in reversed(cur.get('history', [])):
+            if h.get('role') == 'user' and not q_text:
+                q_text = h.get('content', '')
             if h.get('role') == 'assistant':
                 last_reply = h.get('content', '')
                 break
+        if not last_reply:
+            return
+        row = tk.Frame(self.main)
+        row.pack(side='bottom', fill='x', padx=18, pady=(0, 2))
+        tk.Label(row, text='这条回答有用吗？', font=FONT_T).pack(side='left')
 
         def give(rating, b1, b2):
             n = memory.record_feedback(q_text, last_reply, rating)
-            self.status.config(text='已记录%s（偏好数据共 %d 条，将用于模型优化）' % ('好评' if rating else '差评', n or 0))
+            self.status.config(text='已记录%s（偏好数据 %d 条，用于模型优化）' % ('好评' if rating else '差评', n or 0))
             b1.config(state='disabled')
             b2.config(state='disabled')
 
-        ok = tk.Button(btn_row, text='👍 有用', font=FONT_T, relief='flat', command=lambda: give(1, ok, bad))
-        bad = tk.Button(btn_row, text='👎 待改进', font=FONT_T, relief='flat', command=lambda: give(0, ok, bad))
+        ok = tk.Button(row, text='👍 有用', font=FONT_T, relief='flat', command=lambda: give(1, ok, bad))
+        bad = tk.Button(row, text='👎 待改进', font=FONT_T, relief='flat', command=lambda: give(0, ok, bad))
         ok.pack(side='left', padx=4)
         bad.pack(side='left', padx=2)
 
-    # ------------- 会话渲染（切换/新建时重建消息流） -------------
+    # ------------- 会话渲染与主题 -------------
     def render_session(self):
         self.chat.delete('1.0', 'end')
         cur = self._cur_session()
-        hist = cur.get('history') or []
-        for h in hist:
+        self.paradigm = cur.get('paradigm', 'adaptive')
+        for h in cur.get('history') or []:
             if h.get('role') == 'user':
                 self.add_user_msg(h.get('content', ''))
             elif h.get('role') == 'assistant':
@@ -592,7 +614,6 @@ class ChatApp(tk.Tk):
         save_sessions(self.sessions)
         self._refresh_listbox()
 
-    # ------------- 主题应用 -------------
     def set_theme(self, name):
         self.theme_name = name
         self.theme = THEMES[name]
@@ -605,36 +626,39 @@ class ChatApp(tk.Tk):
             self.configure(bg=t['bg'])
             self.chat.configure(bg=t['bg'], fg=t['agent_fg'], insertbackground=t['agent_fg'])
             self.side_list.configure(bg=t['side'], fg=t['h'], selectbackground=t['accent'], selectforeground='#ffffff')
+            self.main.configure(bg=t['bg'])
             self.entry.configure(bg=t['input_bg'], fg=t['agent_fg'], insertbackground=t['agent_fg'])
             self.hint.configure(bg=t['bg'], fg=t['status'])
-            self.send_btn.configure(bg=t['accent'], fg='#ffffff', activebackground=t['accent'])
             self.status.configure(bg=t['bg'], fg=t['status'])
+            self.send_btn.configure(bg=t['accent'], fg='#ffffff', activebackground=t['accent'])
+            for slave in self.main.winfo_children():
+                if isinstance(slave, (tk.Frame, tk.Label)):
+                    try:
+                        slave.configure(bg=t['bg'], highlightbackground=t['agent_border'])
+                    except Exception:
+                        pass
             self.cards.configure(bg=t['bg'])
-            for child in self.side_list.master.winfo_children():
-                if isinstance(child, tk.Button):
-                    child.configure(bg=t['btn_bg'], fg=t['btn_fg'], activebackground=t['hover'])
-            for lbl in self.cards.winfo_children():
-                if isinstance(lbl, tk.Label):
-                    lbl.configure(bg=t['bg'], fg=t['h'])
-            for frame in self.cards.winfo_children():
-                if isinstance(frame, tk.Frame):
-                    for row in frame.winfo_children():
-                        if isinstance(row, tk.Frame):
-                            for card in row.winfo_children():
-                                if isinstance(card, tk.Frame):
-                                    card.configure(bg=t['card'], highlightbackground=t['agent_border'])
-                                    for lbl in card.winfo_children():
-                                        if isinstance(lbl, tk.Label):
-                                            lbl.configure(bg=t['card'], fg=t['agent_fg'])
+            self._apply_cards_theme()
             self._tag_config()
-            self.update_idletasks()
         except Exception:
             pass
 
-    # ------------- 状态栏 -------------
-    def _build_statusbar(self):
-        self.status = tk.Label(self, text='', anchor='w', font=FONT_T, padx=14, pady=3)
-        self.status.pack(side='bottom', fill='x')
+    def _apply_cards_theme(self):
+        t = self.theme
+        for child in self.cards.winfo_children():
+            if isinstance(child, tk.Label):
+                child.configure(bg=t['bg'], fg=t['h'])
+            elif isinstance(child, tk.Frame):
+                child.configure(bg=t['bg'])
+                for row in child.winfo_children():
+                    if isinstance(row, tk.Frame):
+                        row.configure(bg=t['bg'])
+                        for card in row.winfo_children():
+                            if isinstance(card, tk.Frame):
+                                card.configure(bg=t['card'], highlightbackground=t['agent_border'])
+                                for lbl in card.winfo_children():
+                                    if isinstance(lbl, tk.Label):
+                                        lbl.configure(bg=t['card'], fg=t['agent_fg'])
 
     def update_badge(self):
         cfg = llm_mod.load_config()
