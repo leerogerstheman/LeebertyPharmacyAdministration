@@ -30,25 +30,27 @@ SESSIONS_PATH = os.path.join(MEMORY_DIR, 'sessions.json')
 
 # ---------------- 主题系统（浅色/深色，参考主流 Agent 配色） ----------------
 THEMES = {
+    # Material Design 3 light scheme（seed #0b5394 → #0b5daa primary）
     'light': {
-        'name': '浅色',
-        'bg': '#f5f6f8', 'side': '#ffffff', 'card': '#ffffff',
-        'user_bg': '#0b5394', 'user_fg': '#ffffff',
-        'agent_bg': '#ffffff', 'agent_fg': '#1f2328', 'agent_border': '#e2e8ef',
-        'meta': '#8a94a6', 'accent': '#0b5394', 'accent_bg': '#eaf2fa',
-        'h': '#152233', 'code_bg': '#f2f4f7', 'code_fg': '#b8334b', 'quote': '#6b7a90',
-        'input_bg': '#ffffff', 'input_border': '#d5dde6', 'status': '#8a94a6',
-        'btn_bg': '#ffffff', 'btn_fg': '#2b3a4a', 'hover': '#eef2f7',
+        'name': '浅色 (M3)', 'bg': '#fbfcfe', 'side': '#f3f5fa', 'card': '#e7eaf0',
+        'card_hover': '#d7e3f5',
+        'user_bg': '#d5e6ff', 'user_fg': '#001b3b',
+        'agent_bg': '#f3f5fa', 'agent_fg': '#191c20', 'agent_border': '#c4c6cf',
+        'meta': '#44474e', 'accent': '#0b5daa', 'accent_bg': '#d5e6ff',
+        'h': '#191c20', 'code_bg': '#e7eaf0', 'code_fg': '#006874', 'quote': '#44474e',
+        'input_bg': '#f3f5fa', 'input_border': '#c4c6cf', 'status': '#44474e',
+        'btn_bg': '#e7eaf0', 'btn_fg': '#191c20', 'hover': '#d7e3f5',
     },
+    # Material Design 3 dark scheme
     'dark': {
-        'name': '深色',
-        'bg': '#1a1b20', 'side': '#202127', 'card': '#26272e',
-        'user_bg': '#2d6cb8', 'user_fg': '#ffffff',
-        'agent_bg': '#26272e', 'agent_fg': '#e8e8ea', 'agent_border': '#34363f',
-        'meta': '#7e8898', 'accent': '#6ea8ff', 'accent_bg': '#2a3550',
-        'h': '#f0f2f5', 'code_bg': '#30323a', 'code_fg': '#ff8fa3', 'quote': '#99a3b5',
-        'input_bg': '#26272e', 'input_border': '#3c3f49', 'status': '#7e8898',
-        'btn_bg': '#2c2e36', 'btn_fg': '#d8dce4', 'hover': '#353843',
+        'name': '深色 (M3)', 'bg': '#121417', 'side': '#1a1d21', 'card': '#292c30',
+        'card_hover': '#3b495a',
+        'user_bg': '#00468c', 'user_fg': '#d5e6ff',
+        'agent_bg': '#1a1d21', 'agent_fg': '#e2e2e9', 'agent_border': '#44474e',
+        'meta': '#c4c6cf', 'accent': '#a6c9ff', 'accent_bg': '#00468c',
+        'h': '#e2e2e9', 'code_bg': '#292c30', 'code_fg': '#4fd9eb', 'quote': '#c4c6cf',
+        'input_bg': '#1e2125', 'input_border': '#44474e', 'status': '#c4c6cf',
+        'btn_bg': '#292c30', 'btn_fg': '#e2e2e9', 'hover': '#3b495a',
     },
 }
 
@@ -338,6 +340,33 @@ class ChatApp(tk.Tk):
             r, c = divmod(idx, 2)
             card = tk.Frame(grid, padx=14, pady=10, highlightthickness=1, cursor='hand2')
             card.grid(row=r, column=c, sticky='nsew', padx=5, pady=5)
+
+            def _hover(e):
+                try:
+                    card.configure(background=self.theme.get('card_hover'))
+                    for ch in card.winfo_children():
+                        ch.configure(background=self.theme.get('card_hover'))
+                        if isinstance(ch, tk.Frame):
+                            for lbl in ch.winfo_children():
+                                if isinstance(lbl, (tk.Label, tk.Button)):
+                                    lbl.configure(background=self.theme.get('card_hover'))
+                except Exception:
+                    pass
+
+            def _leave(e):
+                try:
+                    card.configure(background=self.theme.get('card'))
+                    for ch in card.winfo_children():
+                        ch.configure(background=self.theme.get('card'))
+                        if isinstance(ch, tk.Frame):
+                            for lbl in ch.winfo_children():
+                                if isinstance(lbl, (tk.Label, tk.Button)):
+                                    lbl.configure(background=self.theme.get('card'))
+                except Exception:
+                    pass
+
+            card.bind('<Enter>', _hover)
+            card.bind('<Leave>', _leave)
             head = tk.Frame(card)
             head.pack(fill='x')
             tk.Label(head, text=title, font=FONT_B, anchor='w').pack(side='left')
