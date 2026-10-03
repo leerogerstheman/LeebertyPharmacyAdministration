@@ -42,6 +42,20 @@
     return html;
   }
 
+
+  // ---------- M3 Snackbar ----------
+  let snackTimer = null;
+  function showSnack(msg){
+    const old = document.querySelector('.snack');
+    if (old) { old.classList.add('out'); setTimeout(() => old.remove(), 220); }
+    const s = document.createElement('div');
+    s.className = 'snack';
+    s.textContent = msg;
+    document.body.appendChild(s);
+    clearTimeout(snackTimer);
+    snackTimer = setTimeout(() => { s.classList.add('out'); setTimeout(() => s.remove(), 220); }, 2600);
+  }
+
   // ---------- 渲染消息 ----------
   function addMsg(who, text, opt){
     opt = opt || {};
@@ -62,10 +76,10 @@
     if (m.who === 'agent' && m.text){
       const acts = document.createElement('div'); acts.className='msg-actions';
       const cpy = document.createElement('button'); cpy.className='mini-btn'; cpy.textContent='📋 复制';
-      cpy.onclick = () => navigator.clipboard.writeText(m.text);
+      cpy.onclick = () => { navigator.clipboard.writeText(m.text).then(()=>showSnack('已复制回答')); };
       const ok = document.createElement('button'); ok.className='mini-btn'; ok.textContent='👍';
       const bad = document.createElement('button'); bad.className='mini-btn'; bad.textContent='👎';
-      const fb = (r) => fetch('/api/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:lastUser(),reply:m.text,rating:r})}).then(r=>r.json()).then(j=>{disclaimer.textContent='已记录'+(r?'好评':'差评')+'（共 '+j.total+' 条偏好数据）'; ok.disabled=bad.disabled=true;});
+      const fb = (r) => fetch('/api/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:lastUser(),reply:m.text,rating:r})}).then(r=>r.json()).then(j=>{showSnack('已记录'+(r?'好评':'差评')+'（共 '+j.total+' 条）'); ok.disabled=bad.disabled=true;});
       ok.onclick = () => fb(1); bad.onclick = () => fb(0);
       acts.append(cpy, ok, bad); div.appendChild(acts);
     }

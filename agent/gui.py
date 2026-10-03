@@ -398,6 +398,7 @@ class ChatApp(tk.Tk):
         self.chat.tag_config('agent', font=FONT, spacing1=6, spacing3=6)
         self.chat.tag_config('src', foreground=t['accent'], font=FONT_T, spacing1=2)
         self.chat.tag_config('tool', foreground=t['quote'], font=FONT_T, spacing1=2)
+        self.chat.tag_config('cursor_tip', foreground=t['accent'])
 
     def _render_md(self, tag, text):
         """把 markdown 渲染进 Text"""
@@ -417,10 +418,27 @@ class ChatApp(tk.Tk):
         self._stream_segs = md_segments(text)
         self._stream_idx = 0
         self.chat.insert('end', '', (tag,))
+        try:
+            self.chat.config(insertwidth=2, insertbackground=self.theme.get('accent'))
+            self.chat.mark_set('insert', 'end-1c')
+            self.chat.focus_force()
+        except Exception:
+            pass
         self._stream_tick(tag)
+
+    def _sync_insert_cursor(self):
+        try:
+            self.chat.mark_set('insert', 'end-1c')
+        except Exception:
+            pass
 
     def _stream_tick(self, tag):
         if self._stream_idx >= len(self._stream_segs):
+            try:
+                self.chat.config(insertwidth=0)
+            except Exception:
+                pass
+            self._stream_segs = []
             self.chat.insert('end', '\n')
             self.chat.see('end')
             return
@@ -430,6 +448,7 @@ class ChatApp(tk.Tk):
             tags = (tag, 'agent') if tg == 'normal' else (tag, tg)
             self.chat.insert('end', s + '\n', tags)
             self.chat.see('end')
+        self._sync_insert_cursor()
         delay = 10 if len(s) > 16 else 22
         self.after(delay, lambda: self._stream_tick(tag))
 
@@ -530,11 +549,15 @@ class ChatApp(tk.Tk):
     def set_busy(self, b, status=None):
         self.busy = b
         self.send_btn.config(state='disabled' if b else 'normal')
-        if status:
-            self.status.config(text=status)
         if b:
+            self._dots = 0
+            self.status.config(text=status or '思考中')
+            self._think_tick()
             self.chat.insert('end', '⏳ 思考中…\n', 'tool')
             self.chat.see('end')
+        else:
+            self._dots = None
+            self._remove_thinking()
 
     def _process(self, q):
         self.set_busy(True, '思考中…')
@@ -565,6 +588,18 @@ class ChatApp(tk.Tk):
             except Exception as e:
                 resp = {'reply': '处理出错：%s' % e, 'role': cur.get('role'), 'state': cur.get('state'), 'sources': [], 'llm': False, 'model': '', 'llm_error': str(e), 'trace': ['异常']}
             handle(resp)
+
+    def _think_tick(self):
+        """思考指示动画：'思考中' 后追加/轮转间隔点（Material Motion 节奏 320ms）"""
+        if not getattr(self, 'busy', False):
+            return
+        try:
+            self._dots = (getattr(self, '_dots', 0) or 0) + 1
+            n = (self._dots % 3) + 1
+            self.status.config(text='思考中' + '•••'[:n])
+        except Exception:
+            return
+        self.after(320, self._think_tick)
 
     def _remove_thinking(self):
         try:
